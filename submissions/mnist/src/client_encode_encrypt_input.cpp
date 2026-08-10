@@ -1,56 +1,66 @@
-// Copyright 2025 Google LLC
+// Copyright (c) 2026 Crypto Lab Inc.
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
+// This software is licensed under the terms of the Apache v2 License.
+// See the LICENSE.md file for details.
+//============================================================================
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+// Stage 6: pack, encode and encrypt the batch.
 //
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-#include "utils.h"
-#include "mlp_encryption_utils.h"
+// IMAGES_PER_CTXT images ride in one ciphertext at slot(c,i) = c*128 + i, so a
+// batch of n needs ceil(n/128) ciphertexts rather than n. The harness only
+// measures the byte size of ciphertexts_upload/, so the file layout is ours to
+// choose; this is where the bandwidth difference against a one-ciphertext-per-
+// image submission comes from.
 
-using namespace lbcrypto;
+#include "mlp_pipeline.hpp"
 
+#include <iostream>
 
-int main(int argc, char* argv[]){
+using namespace heaan;
+using namespace mlp;
 
-    if (argc < 2 || !std::isdigit(argv[1][0])) {
-        std::cout << "Usage: " << argv[0] << " instance-size [--count_only]\n";
-        std::cout << "  Instance-size: 0-SINGLE, 1-SMALL, 2-MEDIUM, 3-LARGE\n";
-        return 0;
-    }
-    auto size = static_cast<InstanceSize>(std::stoi(argv[1]));
-    InstanceParams prms(size);
+int main(int argc, char *argv[]) try {
+    const auto size = parseInstanceSize(argc, argv);
+    const InstanceParams prms(size);
+    const Device dev = targetDevice();
 
-    CryptoContext<DCRTPoly> cc = read_crypto_context(prms);
+    const Levels levels = buildLevels();
+    const u32 top = levels.top();
+    const EnDecoder encoder = makeEncoder(levels);
+    EnDecryptor encryptor{EncryptParams{DiscreteGaussian(NOISE_STDDEV)}};
 
-    // Step 2: Read public key
-    PublicKey<DCRTPoly> pk = read_public_key(prms);
+    auto enc_key = serial::loadAsPtr<IEncKey>(
+        (prms.pubkeydir() / ENC_KEY_FILE).string(), dev);
 
-    std::vector<Sample> dataset;
-    load_dataset(dataset, prms.preprocessed_input_file().c_str());
-    if (dataset.empty()) {
-        throw std::runtime_error("No data found in " + prms.preprocessed_input_file().string());
-    }
-    // Step 2: Encrypt inputs
-    if (dataset.size() != prms.getBatchSize()) {
-        throw std::runtime_error("Dataset size does not match instance size");
-    }
+    auto images = readSamples(prms.preprocessed_input_file().string(), INPUT_DIM);
+    if (images.size() != prms.getBatchSize())
+        throw std::runtime_error("preprocessed input size does not match "
+                                 "instance batch size");
 
-    std::vector<CiphertextT> ctxt;
     fs::create_directories(prms.ctxtupdir());
-    for (size_t i = 0; i < dataset.size(); ++i) {
-        auto *input = dataset[i].image;
-        std::vector<float> input_vector(input, input + MNIST_DIM);
-        ctxt = mlp_encrypt(cc, input_vector, pk);
-        auto ctxt_path = prms.ctxtupdir()/("cipher_input_" + std::to_string(i) + ".bin");
-        Serial::SerializeToFile(ctxt_path, ctxt, SerType::BINARY);
+    const size_t n_ct = numCtxts(images.size());
+    for (size_t j = 0; j < n_ct; ++j) {
+        const size_t first = j * IMAGES_PER_CTXT;
+        const size_t count = std::min<size_t>(IMAGES_PER_CTXT,
+                                              images.size() - first);
+        auto msg = packImages(images, first, count);
+        msg.to(dev);
+
+        auto ptxt = IPlaintext::make(PtxtType::NORMAL);
+        auto ctxt = ICiphertext::make(EncType::RLWE);
+        encoder.encode(msg, *ptxt, top);
+        encryptor.encrypt(*ptxt, *enc_key, *ctxt);
+
+        serial::save(
+            (prms.ctxtupdir() / ("cipher_input_" + std::to_string(j) + ".bin"))
+                .string(),
+            *ctxt);
     }
 
+    std::cout << "         [client] encrypted " << images.size()
+              << " images into " << n_ct << " ciphertext(s)\n";
     return 0;
+} catch (const std::exception &e) {
+    std::cerr << "client_encode_encrypt_input: " << e.what() << "\n";
+    return 1;
 }

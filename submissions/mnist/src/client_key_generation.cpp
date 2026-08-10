@@ -1,60 +1,95 @@
-// Copyright 2025 Google LLC
+// Copyright (c) 2026 Crypto Lab Inc.
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
+// This software is licensed under the terms of the Apache v2 License.
+// See the LICENSE.md file for details.
+//============================================================================
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+// Stage 2.2: generate all key material at the client.
 //
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-#include "utils.h"
-#include "mlp_encryption_utils.h"
+// The secret key is sampled at 2^SMALL_LOG_DEGREE and lifted to 2^LOG_DEGREE.
+// Lifting adds no entropy -- it buys fc1's key-less fold, and the switching
+// key budget is sized from the sampled degree. See mlp_params.hpp.
+//
+// Rotation keys are derived from the layer *shapes* only. The client has no
+// model and is not entitled to one, so nothing here may depend on the weights.
 
-int main(int argc, char* argv[]){
+#include "mlp_pipeline.hpp"
 
-    if (argc < 2 || !std::isdigit(argv[1][0])) {
-        std::cout << "Usage: " << argv[0] << " instance-size [--count_only]\n";
-        std::cout << "  Instance-size: 0-SINGLE, 1-SMALL, 2-MEDIUM, 3-LARGE\n";
-        return 0;
-    }
-    auto size = static_cast<InstanceSize>(std::stoi(argv[1]));
-    InstanceParams prms(size);
+#include <iostream>
 
-    // Step 1: Setup CryptoContext
-    auto cryptoContext = mlp_generate_crypto_context();
+using namespace heaan;
+using namespace mlp;
 
-    // Step 2: Key Generation
-    auto keyPair = cryptoContext->KeyGen();
-    cryptoContext = generate_mult_rot_key(cryptoContext, keyPair.secretKey);
+int main(int argc, char *argv[]) try {
+    const auto size = parseInstanceSize(argc, argv);
+    const InstanceParams prms(size);
+    const Device dev = targetDevice();
 
-    // Step 3: Serialize cryptocontext and keys
-    fs::create_directories(prms.pubkeydir());
+    const Levels levels = buildLevels();
+    const u32 top = levels.top();
+    const bool conj_inv = (NTT_ALG == NTTAlgorithm::CYC_FOR_CI);
 
-    if (!Serial::SerializeToFile(prms.pubkeydir()/"cc.bin", cryptoContext,
-                                SerType::BINARY) ||
-        !Serial::SerializeToFile(prms.pubkeydir()/"pk.bin",
-                                keyPair.publicKey, SerType::BINARY)) {
-        throw std::runtime_error("Failed to write keys to " + prms.pubkeydir().string());
-    }
-    std::ofstream emult_file(prms.pubkeydir()/"mk.bin",
-                           std::ios::out | std::ios::binary);
-    std::ofstream erot_file(prms.pubkeydir()/"rk.bin",
-                            std::ios::out | std::ios::binary);
-    if (!emult_file.is_open() || !erot_file.is_open() ||
-        !cryptoContext->SerializeEvalMultKey(emult_file, SerType::BINARY) ||
-        !cryptoContext->SerializeEvalAutomorphismKey(erot_file, SerType::BINARY)) {
+    // ---- secret key: sampled low, lifted high ----
+    SKGenerator skgen{SKGenParams{LOG_DEGREE, HW, NTT_ALG}};
+    SKGenerator skgen_low{SKGenParams{SMALL_LOG_DEGREE, HW, NTT_ALG}};
+    auto sk = skgen.genHighDegreeKey(*skgen_low.genKey());
+
+    // The key-less fold is valid only when fc1's fold stride divides evenly
+    // into the lifted key's invariance period. Checked here so a change to the
+    // packing fails loudly at key generation rather than decrypting to noise.
+    const u32 period = rotInvariantPeriod(SMALL_LOG_DEGREE);
+    const u32 fc1_stride = IMAGES_PER_CTXT * FC1.p;
+    if (fc1_stride % period != 0)
         throw std::runtime_error(
-            "Failed to write eval keys to " + prms.pubkeydir().string());
-    }
+            "fc1 fold stride " + std::to_string(fc1_stride) +
+            " is not a multiple of the rotation-invariance period " +
+            std::to_string(period) + "; the key-less fold would be wrong");
 
+    // ---- public encryption key, at the level inputs are encrypted to ----
+    EncKeyGenerator enckeygen{EncKeyGenParams{DiscreteGaussian(NOISE_STDDEV),
+                                              POLY_TYPE, levels.mods[top],
+                                              NTT_ALG}};
+    auto enc_key = enckeygen.genKey(*sk);
+
+    // ---- switching keys ----
+    paramsUtils::SwKeyGenParamsBuilder swk;
+    swk.setNoiseDistribution(DiscreteGaussian(NOISE_STDDEV));
+    // The keys live in the full ring...
+    swk.setRing(LOG_DEGREE, POLY_TYPE);
+    // ...but the budget is that of the degree the key was actually sampled at.
+    swk.setModUpPrimes(swkMaxBits(), SWK_MARGIN);
+
+    const u32 fc1_in = top - FC1_IN_DROP, fc1_out = top - FC1_OUT_DROP;
+    const u32 fc2_in = top - FC2_IN_DROP;
+
+    SwKeyGenerator rot1_gen(swk.build(levels.mods[fc1_in], conj_inv));
+    auto rot_keys_fc1 = rot1_gen.genRotKeys(
+        *sk, MatrixVectorEval::rotKeyIndices(
+                 makeMvParams(FC1, levels, fc1_in, levels.scales[fc1_in])));
+
+    SwKeyGenerator rot2_gen(swk.build(levels.mods[fc2_in], conj_inv));
+    auto rot_keys_fc2 = rot2_gen.genRotKeys(
+        *sk, MatrixVectorEval::rotKeyIndices(
+                 makeMvParams(FC2, levels, fc2_in, levels.scales[fc2_in])));
+
+    // Relinearization for the x^2, at the level the squaring happens on.
+    SwKeyGenerator relin_gen(swk.build(levels.mods[fc1_out], conj_inv));
+    auto relin_key = relin_gen.genRelinKey(*sk);
+
+    // ---- serialize ----
+    fs::create_directories(prms.pubkeydir());
     fs::create_directories(prms.seckeydir());
-    if (!Serial::SerializeToFile(prms.seckeydir()/"sk.bin",
-                                keyPair.secretKey, SerType::BINARY)) {
-        throw std::runtime_error("Failed to write keys to " + prms.seckeydir().string());
-    }
+
+    serial::save((prms.seckeydir() / SECRET_KEY_FILE).string(), *sk);
+    serial::save((prms.pubkeydir() / ENC_KEY_FILE).string(), *enc_key);
+    serial::save((prms.pubkeydir() / ROT_KEY_FC1_FILE).string(), rot_keys_fc1);
+    serial::save((prms.pubkeydir() / ROT_KEY_FC2_FILE).string(), rot_keys_fc2);
+    serial::save((prms.pubkeydir() / RELIN_KEY_FILE).string(), *relin_key);
+
+    std::cout << "         [client] keys written to " << prms.pubkeydir()
+              << " (device " << (dev == Device::CPU ? "CPU" : "GPU") << ")\n";
     return 0;
+} catch (const std::exception &e) {
+    std::cerr << "client_key_generation: " << e.what() << "\n";
+    return 1;
 }

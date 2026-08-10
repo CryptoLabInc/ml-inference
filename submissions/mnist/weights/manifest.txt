@@ -1,0 +1,15 @@
+FHE-Benchmark ML-Inference — deployment weights (BN folded)
+circuit:  fc1 -> x^2 -> fc2   (depth = 2 matvec + 1 square)
+layout:   CSV row-major, comma-separated, no header. y = W @ x + b.
+acc:      folded test accuracy = 97.96%  (max|logit diff| = 6.104e-05)
+input:    flatten 28x28 -> 784, then normalize per pixel: (p/255 - 0.1307) / 0.3081
+crop:     center-crop the normalized 28x28 to 22x22 -> 484 (trim 3 px per side) before fc1;
+          done in the client right before encryption, so it feeds the full 28x28 (784).
+output:   10 logits -> client takes argmax (no softmax needed)
+dtype:    float64 in CSV
+
+W1: 128x484   b1: 128
+W2: 10x128   b2: 10
+
+test set: MLInference reads the MNIST 10k test split straight from the
+idx files in mlp/data/MNIST/raw and normalizes per the `input:` line above.

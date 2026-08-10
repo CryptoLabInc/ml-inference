@@ -1,57 +1,53 @@
-// Copyright 2025 Google LLC
+// Copyright (c) 2026 Crypto Lab Inc.
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
+// This software is licensed under the terms of the Apache v2 License.
+// See the LICENSE.md file for details.
+//============================================================================
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+// Stage 5: cleartext client-side input preparation.
 //
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-#include "utils.h"
-#include "params.h"
-#include "mlp_encryption_utils.h"
-#include <fstream>
-#include <sstream>
-#include <vector>
+// Two operations, both in the clear, both documented in README.md:
+//   1. normalize (p - MNIST_MEAN) / MNIST_STD -- the harness writes pixels
+//      already scaled to [0,1]; this is the same affine map the harness's own
+//      reference model applies in harness/mnist/test.py.
+//   2. center-crop 28x28 -> 22x22 (784 -> 484) -- the model was TRAINED on
+//      cropped input, so this is part of the model definition. It also halves
+//      the padded coordinate dimension, which is what fits 128 images per
+//      ciphertext instead of 64. See "The crop" in README.md.
 
-using namespace lbcrypto;
+#include "mlp_pipeline.hpp"
 
+#include <iostream>
 
-int main(int argc, char* argv[]){
+using namespace mlp;
 
-    if (argc < 2 || !std::isdigit(argv[1][0])) {
-        std::cout << "Usage: " << argv[0] << " instance-size [--count_only]\n";
-        std::cout << "  Instance-size: 0-SINGLE, 1-SMALL, 2-MEDIUM, 3-LARGE\n";
-        return 0;
-    }
-    auto size = static_cast<InstanceSize>(std::stoi(argv[1]));
-    InstanceParams prms(size);
+int main(int argc, char *argv[]) try {
+    const auto size = parseInstanceSize(argc, argv);
+    const InstanceParams prms(size);
 
-    std::string test_pixels_path = prms.test_input_file().string();
+    auto dataset = readSamples(prms.test_input_file().string(), MNIST_DIM);
+    if (dataset.size() != prms.getBatchSize())
+        throw std::runtime_error("dataset size " +
+                                 std::to_string(dataset.size()) +
+                                 " does not match instance batch size " +
+                                 std::to_string(prms.getBatchSize()));
 
-    std::vector<Sample> dataset;
-    load_dataset(dataset, prms.test_input_file().c_str());
-    if (dataset.empty()) {
-        throw std::runtime_error("No data found in " + prms.test_input_file().string());
-    }
-
-    if (dataset.size() != prms.getBatchSize()) {
-        throw std::runtime_error("Dataset size does not match instance size");
-    }
-
-    // Normalize the inputs
-    for (auto& sample : dataset) {
-        for (int i = 0; i < MNIST_DIM; ++i) {
-            sample.image[i] = (sample.image[i] - 0.1307) / 0.3081; // Normalization
-        }
+    std::vector<std::vector<double>> out;
+    out.reserve(dataset.size());
+    for (const auto &img : dataset) {
+        std::vector<double> cropped(INPUT_DIM);
+        for (u32 r = 0; r < CROP_DIM; ++r)
+            for (u32 c = 0; c < CROP_DIM; ++c) {
+                const double p = img[(r + CROP) * IMG_DIM + (c + CROP)];
+                cropped[r * CROP_DIM + c] = (p - MNIST_MEAN) / MNIST_STD;
+            }
+        out.push_back(std::move(cropped));
     }
 
     fs::create_directories(prms.iointermdir());
-    write_dataset(dataset, prms.preprocessed_input_file().c_str());
-
+    writeSamples(out, prms.preprocessed_input_file().string());
     return 0;
+} catch (const std::exception &e) {
+    std::cerr << "client_preprocess_input: " << e.what() << "\n";
+    return 1;
 }

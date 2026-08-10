@@ -1,54 +1,50 @@
-// Copyright 2025 Google LLC
+// Copyright (c) 2026 Crypto Lab Inc.
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
+// This software is licensed under the terms of the Apache v2 License.
+// See the LICENSE.md file for details.
+//============================================================================
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+// Stage 9: argmax over the 10 decrypted logits, in the clear.
 //
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-#include "utils.h"
-#include "params.h"
-#include "mlp_encryption_utils.h"
+// Writes exactly one bare decimal label per line, batch_size lines. The
+// harness compares this file string-wise against the ground truth and uses
+// len(predictions) as the accuracy denominator, so a short file would silently
+// inflate the score -- the count is asserted below.
+
+#include "mlp_pipeline.hpp"
+
 #include <fstream>
-#include <sstream>
-#include <vector>
+#include <iostream>
 
-using namespace lbcrypto;
+using namespace mlp;
 
+int main(int argc, char *argv[]) try {
+    const auto size = parseInstanceSize(argc, argv);
+    const InstanceParams prms(size);
 
-int main(int argc, char* argv[]){
+    const auto scores =
+        readSamples(prms.model_scores_file().string(), LABEL_DIM);
+    if (scores.size() != prms.getBatchSize())
+        throw std::runtime_error("score rows " + std::to_string(scores.size()) +
+                                 " do not match instance batch size " +
+                                 std::to_string(prms.getBatchSize()));
 
-    if (argc < 2 || !std::isdigit(argv[1][0])) {
-        std::cout << "Usage: " << argv[0] << " instance-size [--count_only]\n";
-        std::cout << "  Instance-size: 0-SINGLE, 1-SMALL, 2-MEDIUM, 3-LARGE\n";
-        return 0;
+    std::ofstream out(prms.encrypted_model_predictions_file());
+    if (!out.good())
+        throw std::runtime_error(
+            "cannot write " + prms.encrypted_model_predictions_file().string());
+
+    for (const auto &row : scores) {
+        size_t best = 0;
+        for (size_t r = 1; r < row.size(); ++r)
+            if (row[r] > row[best])
+                best = r;
+        out << best << '\n';
     }
-    auto size = static_cast<InstanceSize>(std::stoi(argv[1]));
-    InstanceParams prms(size);
-
-    std::string model_scores_path = prms.model_scores_file().string();
-
-    std::vector<Score> dataset;
-    load_scores(dataset, prms.model_scores_file().c_str());
-    if (dataset.empty()) {
-        throw std::runtime_error("No data found in " + prms.model_scores_file().string());
-    }
-
-    if (dataset.size() != prms.getBatchSize()) {
-        throw std::runtime_error("Dataset size does not match instance size");
-    }
-
-    auto result_path = prms.encrypted_model_predictions_file();
-    std::ofstream out(result_path);
-    for (auto& score : dataset) {
-        auto max_id = argmax(score.score, 10);
-        out << max_id << '\n';
-    }
-
+    if (!out)
+        throw std::runtime_error("short write to predictions file");
     return 0;
+} catch (const std::exception &e) {
+    std::cerr << "client_postprocess: " << e.what() << "\n";
+    return 1;
 }

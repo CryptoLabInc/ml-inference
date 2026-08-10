@@ -1,119 +1,66 @@
-cmake_minimum_required(VERSION 3.14)
-project(add_openfhe LANGUAGES CXX)
+# Copyright (c) 2026 Crypto Lab Inc.
+#
+# This software is licensed under the terms of the Apache v2 License.
+# See the LICENSE.md file for details.
+# ---------------------------------------------------------------------------
+# HEaaN2 MNIST MLP submission.
+#
+# Built against the HEaaN2 *public* API only: no HEaaN2 source is vendored
+# here. Point CMAKE_PREFIX_PATH at a HEaaN2 install tree (scripts/build_task.sh
+# does this from $HEAAN2_ROOT).
 
-# --------------------------------------------------------------------
-# 1.  Compiler / flags
-# --------------------------------------------------------------------
+cmake_minimum_required(VERSION 3.23)
+project(
+  heaan2_mnist_mlp
+  VERSION 0.1.0
+  DESCRIPTION "MNIST MLP FHE inference benchmark submission built on HEaaN2"
+  LANGUAGES CXX)
+
 set(CMAKE_CXX_STANDARD 17)
-# set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-# add_compile_options(-O3 -Wall -Wextra -Wno-unused-parameter)
-option( BUILD_STATIC "Set to ON to include static versions of the library" OFF)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# --------------------------------------------------------------------
-# 2.  Find the OpenFHE *package* that the install script put into
-#     third_party/openfhe
-# --------------------------------------------------------------------
-#   scripts/get_openfhe.sh installs:
-#     third_party/openfhe/lib/cmake/OpenFHE/OpenFHEConfig.cmake
-
-find_package(OpenFHE CONFIG REQUIRED)
-if (OpenFHE_FOUND)
-    message(STATUS "FOUND PACKAGE OpenFHE")
-    message(STATUS "OpenFHE Version: ${BASE_OPENFHE_VERSION}")
-    message(STATUS "OpenFHE installed as shared libraries: ${OpenFHE_SHARED}")
-    message(STATUS "OpenFHE include files location: ${OpenFHE_INCLUDE}")
-    message(STATUS "OpenFHE lib files location: ${OpenFHE_LIBDIR}")
-    message(STATUS "OpenFHE Native Backend size: ${OpenFHE_NATIVE_SIZE}")
-else()
-    message(FATAL_ERROR "PACKAGE OpenFHE NOT FOUND")
-endif ()
-
-# --------------------------------------------------------------------
-# 2b. Find LibTorch (PyTorch C++ distribution)
-# --------------------------------------------------------------------
-find_package(Torch REQUIRED)
-if (Torch_FOUND)
-    message(STATUS "FOUND PACKAGE Torch")
-    message(STATUS "Torch include dirs: ${TORCH_INCLUDE_DIRS}")
-    message(STATUS "Torch libraries: ${TORCH_LIBRARIES}")
-else()
-    message(FATAL_ERROR "PACKAGE Torch NOT FOUND")
-endif ()
-
-set( CMAKE_CXX_FLAGS "${OpenFHE_CXX_FLAGS} -Werror")
-
-# --------------------------------------------------------------------
-# 3.  Link libraries
-# --------------------------------------------------------------------
-
-include_directories( ${OPENMP_INCLUDES} )
-include_directories( ${OpenFHE_INCLUDE} )
-include_directories( ${OpenFHE_INCLUDE}/third-party/include )
-include_directories( ${OpenFHE_INCLUDE}/core )
-include_directories( ${OpenFHE_INCLUDE}/pke )
-include_directories( ${OpenFHE_INCLUDE}/binfhe )
-### add directories for other OpenFHE modules as needed for your project
-
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
-# include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../third_party)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../../third_party)
-
-link_directories( ${OpenFHE_LIBDIR} )
-link_directories( ${OPENMP_LIBRARIES} )
-link_directories( ${CMAKE_CURRENT_SOURCE_DIR}/pre-built-library )
-
-# set(CMAKE_SKIP_BUILD_RPATH FALSE)
-# set(CMAKE_BUILD_WITH_INSTALL_RPATH OFF)
-# set(CMAKE_BUILD_RPATH "${OpenFHE_LIBDIR}") 
-# set(CMAKE_INSTALL_RPATH "${OpenFHE_LIBDIR}") 
-# set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
-add_link_options(-Wl,--no-as-needed)
-
-# These should take care of setting the correct LD path without manually setting LD_LIBRARY_PATH. 
-# But if a shared library or symbol lookup error occurs, you need to set the LD_LIBRARY_PATH environment 
-# to the OpenFHE lib directory: export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/path/to/OpenFHE/lib
-
-if(BUILD_STATIC)
-    set( CMAKE_EXE_LINKER_FLAGS "${OpenFHE_EXE_LINKER_FLAGS} -static")
-    link_libraries( ${OpenFHE_STATIC_LIBRARIES} )
-    message(STATUS "Build with static libs")
-else()
-    set( CMAKE_EXE_LINKER_FLAGS ${OpenFHE_EXE_LINKER_FLAGS} )
-    link_libraries( ${OpenFHE_SHARED_LIBRARIES} )
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
 endif()
 
-# --------------------------------------------------------------------
-# 4.  Create mlp library
-# --------------------------------------------------------------------
+option(BUILD_WITH_CUDA "Build the submission against the CUDA HEaaN2 backend" ON)
 
-add_library( mlp_encryption_utils src/mlp_encryption_utils.cpp )
-add_library( mlp_openfhe src/mlp_openfhe.cpp )
+find_package(HEaaN2 REQUIRED)
+find_package(OpenMP REQUIRED)
 
-# --------------------------------------------------------------------
-# 5.  Each *.cpp file becomes its own executable.
-#     The seven stage names are hard-wired by the benchmark contract.
-# --------------------------------------------------------------------
- 
-add_executable( client_key_generation src/client_key_generation.cpp )
-target_link_libraries( client_key_generation mlp_encryption_utils )
+# --- shared pipeline -------------------------------------------------------
+add_library(mlp_pipeline STATIC src/mlp_pipeline.cpp)
+target_include_directories(mlp_pipeline PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(mlp_pipeline PUBLIC HEaaN2::HEaaN2 OpenMP::OpenMP_CXX)
+set_target_properties(mlp_pipeline PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-add_executable( client_preprocess_input src/client_preprocess_input.cpp )
-target_link_libraries( client_preprocess_input mlp_encryption_utils )
+if(BUILD_WITH_CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  target_link_libraries(mlp_pipeline PUBLIC CUDA::cudart_static)
+  # Selects Device::GPU_CUDA in mlp::targetDevice().
+  target_compile_definitions(mlp_pipeline PUBLIC MLP_WITH_CUDA)
+endif()
 
-add_executable( client_encode_encrypt_input src/client_encode_encrypt_input.cpp )
-target_link_libraries( client_encode_encrypt_input mlp_encryption_utils )
+# --- the seven stage executables -------------------------------------------
+# These names are the benchmark contract: harness/utils.py resolves each stage
+# to submissions/mnist/build/<name> and SILENTLY SKIPS a stage whose binary is
+# missing. Do not rename any of them.
+set(MLP_STAGES
+    client_key_generation
+    client_preprocess_input
+    client_encode_encrypt_input
+    server_preprocess_model
+    server_encrypted_compute
+    client_decrypt_decode
+    client_postprocess)
 
-add_executable( client_decrypt_decode src/client_decrypt_decode.cpp )
-target_link_libraries( client_decrypt_decode mlp_encryption_utils )
-
-add_executable( client_postprocess src/client_postprocess.cpp )
-target_link_libraries( client_postprocess mlp_encryption_utils )
-
-add_executable( server_preprocess_model src/server_preprocess_model.cpp )
-
-add_executable( server_encrypted_compute src/server_encrypted_compute.cpp )
-target_link_libraries( server_encrypted_compute mlp_openfhe )
-target_link_libraries( server_encrypted_compute mlp_encryption_utils )
-target_link_libraries( server_encrypted_compute "${TORCH_LIBRARIES}" )
-
-
+foreach(stage ${MLP_STAGES})
+  add_executable(${stage} src/${stage}.cpp)
+  target_link_libraries(${stage} PRIVATE mlp_pipeline)
+  # The harness runs the binaries straight out of build/, with no
+  # LD_LIBRARY_PATH set, so the HEaaN2 location has to be baked in.
+  set_target_properties(${stage} PROPERTIES
+    BUILD_WITH_INSTALL_RPATH FALSE
+    INSTALL_RPATH_USE_LINK_PATH TRUE)
+endforeach()

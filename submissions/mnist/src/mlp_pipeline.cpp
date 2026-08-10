@@ -1,0 +1,381 @@
+// Copyright (c) 2026 Crypto Lab Inc.
+//
+// This software is licensed under the terms of the Apache v2 License.
+// See the LICENSE.md file for details.
+//============================================================================
+
+#include "mlp_pipeline.hpp"
+
+#include <cctype>
+#include <cstdio>
+#include <fstream>
+#include <iostream>
+#include <set>
+#include <sstream>
+
+using namespace heaan;
+
+namespace mlp {
+
+//===========================================================================
+// Parameter reconstruction
+//===========================================================================
+
+Levels buildLevels() {
+    paramsUtils::LevelsBuilder lb;
+    lb.setRing(LOG_DEGREE, POLY_TYPE);
+    lb.initMod(BASE_BITS);
+    return lb.buildAbove(NUM_MULTS, RESCALE_BITS);
+}
+
+EnDecoder makeEncoder(const Levels &levels) {
+    const EncodeParams ecd_params(POLY_TYPE, LOG_DEGREE, levels, NTT_ALG,
+                                  /*coeff_encoding=*/false);
+    return EnDecoder(ecd_params);
+}
+
+MatrixVectorEvalParams makeMvParams(const LayerGeom &geom, const Levels &levels,
+                                    u32 in_level, Real128 in_scale) {
+    const PolyRing in_ring{levels.mods[in_level], LOG_DEGREE, NTT_ALG};
+    const Encoding in_ecd{LOG_SLOTS, in_scale, /*dft=*/true};
+
+    MatrixVectorEvalParams p;
+    p.setSteps(bsIndices(geom), gsIndices(geom))
+        .setInput(in_ring, in_ecd)
+        .setLevels(levels)
+        .setPolyType(POLY_TYPE);
+    p.checkValidity();
+    return p;
+}
+
+//===========================================================================
+// Model I/O
+//===========================================================================
+
+namespace {
+
+// Split a stream of numbers on commas / whitespace / newlines.
+std::vector<double> parseNumbers(const std::string &text) {
+    std::vector<double> v;
+    std::string cur;
+    auto flush = [&] {
+        if (!cur.empty()) {
+            v.push_back(std::stod(cur));
+            cur.clear();
+        }
+    };
+    for (char ch : text) {
+        if (ch == ',' || ch == '\n' || ch == '\r' || ch == ' ' || ch == '\t')
+            flush();
+        else
+            cur.push_back(ch);
+    }
+    flush();
+    return v;
+}
+
+std::string slurp(const std::string &path) {
+    std::ifstream f(path);
+    if (!f.good())
+        throw std::runtime_error("cannot open " + path);
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
+}
+
+} // namespace
+
+std::vector<double> readFlatCsv(const std::string &path) {
+    return parseNumbers(slurp(path));
+}
+
+std::vector<std::vector<double>> readMatrixCsv(const std::string &path) {
+    std::ifstream f(path);
+    if (!f.good())
+        throw std::runtime_error("cannot open " + path);
+    std::vector<std::vector<double>> rows;
+    std::string line;
+    while (std::getline(f, line)) {
+        auto row = parseNumbers(line);
+        if (!row.empty())
+            rows.push_back(std::move(row));
+    }
+    if (rows.empty())
+        throw std::runtime_error("empty matrix csv: " + path);
+    for (const auto &r : rows)
+        if (r.size() != rows.front().size())
+            throw std::runtime_error("ragged matrix csv: " + path);
+    return rows;
+}
+
+LayerWeights padWeights(const LayerGeom &geom,
+                        const std::vector<std::vector<double>> &dense,
+                        const std::vector<double> &bias) {
+    if (dense.size() != geom.n_out)
+        throw std::runtime_error("weight rows != n_out");
+    if (bias.size() != geom.n_out)
+        throw std::runtime_error("bias length != n_out");
+    if (geom.n_out > geom.p)
+        throw std::runtime_error("n_out exceeds output period p");
+
+    LayerWeights lw;
+    lw.W.assign(static_cast<size_t>(geom.p) * geom.q, 0.0);
+    lw.b = bias;
+    for (u32 r = 0; r < dense.size(); ++r) {
+        if (dense[r].size() > geom.q)
+            throw std::runtime_error("weight cols exceed input period q");
+        for (u32 c = 0; c < dense[r].size(); ++c)
+            lw.W[static_cast<size_t>(r) * geom.q + c] = dense[r][c];
+    }
+    return lw;
+}
+
+void writeLayerWeights(const LayerWeights &lw, const std::string &path) {
+    std::ofstream f(path, std::ios::binary);
+    if (!f.good())
+        throw std::runtime_error("cannot write " + path);
+    f.write(reinterpret_cast<const char *>(lw.W.data()),
+            static_cast<std::streamsize>(lw.W.size() * sizeof(double)));
+    f.write(reinterpret_cast<const char *>(lw.b.data()),
+            static_cast<std::streamsize>(lw.b.size() * sizeof(double)));
+    if (!f)
+        throw std::runtime_error("short write to " + path);
+}
+
+LayerWeights readLayerWeights(const LayerGeom &geom, const std::string &path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f.good())
+        throw std::runtime_error("cannot open " + path +
+                                 " (run server_preprocess_model first)");
+    LayerWeights lw;
+    lw.W.resize(static_cast<size_t>(geom.p) * geom.q);
+    lw.b.resize(geom.n_out);
+    f.read(reinterpret_cast<char *>(lw.W.data()),
+           static_cast<std::streamsize>(lw.W.size() * sizeof(double)));
+    f.read(reinterpret_cast<char *>(lw.b.data()),
+           static_cast<std::streamsize>(lw.b.size() * sizeof(double)));
+    if (!f)
+        throw std::runtime_error("truncated model cache " + path);
+    return lw;
+}
+
+//===========================================================================
+// Packing
+//===========================================================================
+
+Message packImages(const std::vector<std::vector<double>> &images,
+                   size_t first, size_t count) {
+    if (count > IMAGES_PER_CTXT)
+        throw std::runtime_error("more images than fit in a ciphertext");
+    Message in(LOG_SLOTS);
+    for (u32 s = 0; s < SLOTS; ++s)
+        in[s] = Complex(0.0);
+    for (size_t i = 0; i < count; ++i) {
+        const auto &img = images[first + i];
+        if (img.size() != INPUT_DIM)
+            throw std::runtime_error("packImages expects cropped INPUT_DIM rows");
+        for (u32 c = 0; c < INPUT_DIM; ++c)
+            in[slotOf(c, static_cast<u32>(i))] =
+                Complex(static_cast<Real>(img[c]));
+    }
+    return in;
+}
+
+std::map<i32, Message> buildDiags(const LayerGeom &geom,
+                                  const std::vector<double> &W) {
+    if (W.size() != static_cast<size_t>(geom.p) * geom.q)
+        throw std::runtime_error("weight block is not p x q");
+
+    std::map<i32, Message> diags;
+    for (u32 k = 0; k < geom.p; ++k) {
+        Message diag(LOG_SLOTS);
+        for (u32 s = 0; s < SLOTS; ++s) {
+            const u32 c = s / IMAGES_PER_CTXT;
+            diag[s] = Complex(static_cast<Real>(
+                W[(c % geom.p) * geom.q + (c + k) % geom.q]));
+        }
+        // Offset gs + bs == IMAGES_PER_CTXT * k by construction of
+        // bsIndices/gsIndices; keep every diagonal so the declared step sets
+        // always have something to evaluate.
+        diags[static_cast<i32>(IMAGES_PER_CTXT * k)] = std::move(diag);
+    }
+    return diags;
+}
+
+Message buildBiasMessage(const LayerGeom &geom, const std::vector<double> &b) {
+    Message msg(LOG_SLOTS);
+    for (u32 s = 0; s < SLOTS; ++s) {
+        const u32 r = (s / IMAGES_PER_CTXT) % geom.p;
+        msg[s] = (r < geom.n_out) ? Complex(static_cast<Real>(b[r]))
+                                  : Complex(0.0);
+    }
+    return msg;
+}
+
+//===========================================================================
+// Layer assembly and evaluation
+//===========================================================================
+
+Layer makeLayer(const LayerGeom &geom, const LayerWeights &lw,
+                const Levels &levels, u32 in_level, u32 out_level,
+                const EnDecoder &encoder,
+                std::unique_ptr<RotKeyPtrs> rot_keys, KeyPtr relin_key,
+                Device dev) {
+    if (out_level >= in_level)
+        throw std::runtime_error("layer must consume at least one level");
+
+    Layer lyr;
+    lyr.activate = geom.activate;
+    lyr.mod_to = levels.mods[out_level];
+    lyr.scale_to = levels.scales[out_level];
+
+    const auto mv_params =
+        makeMvParams(geom, levels, in_level, levels.scales[in_level]);
+    auto diags = buildDiags(geom, lw.W);
+
+    lyr.rot_keys = std::move(rot_keys);
+    lyr.matvec = std::make_unique<MatrixVectorEval>(mv_params, *lyr.rot_keys,
+                                                    diags);
+
+    // Fold: sum the q/p cosets {0, s, 2s, ...}. The key-less path is valid
+    // exactly when the stride is a multiple of the lifted key's invariance
+    // period -- a divisibility, not a lower bound. Getting this wrong throws
+    // nothing; it would silently decrypt to noise, hence the explicit check
+    // in the caller.
+    lyr.fold_stride = static_cast<i32>(IMAGES_PER_CTXT * geom.p);
+    lyr.fold_factor = geom.q / geom.p;
+    const u32 period = rotInvariantPeriod(SMALL_LOG_DEGREE);
+    lyr.keyless_fold = lyr.fold_factor > 1 &&
+                       (lyr.fold_factor & (lyr.fold_factor - 1)) == 0 &&
+                       lyr.fold_stride > 0 &&
+                       static_cast<u32>(lyr.fold_stride) % period == 0;
+
+    if (!lyr.keyless_fold && lyr.fold_factor > 1)
+        throw std::runtime_error(
+            "layer needs a keyed fold, which this submission does not ship "
+            "keys for; check the packing against SMALL_LOG_DEGREE");
+
+    lyr.relin_key = std::move(relin_key);
+    if (geom.activate && !lyr.relin_key)
+        throw std::runtime_error("activating layer needs a relinearization key");
+
+    auto bias_msg = buildBiasMessage(geom, lw.b);
+    bias_msg.to(dev);
+    lyr.bias = IPlaintext::make(PtxtType::NORMAL);
+    encoder.encode(bias_msg, *lyr.bias, lyr.mod_to, lyr.scale_to);
+
+    return lyr;
+}
+
+void homLayer(Ptr<ICiphertext> &ct, const Layer &lyr, const HomEval &eval,
+              const HomEvalFlexible &flex) {
+    auto res = ICiphertext::make(EncType::RLWE);
+    lyr.matvec->eval(*ct, *res);
+
+    // MatrixVectorEval drops exactly one level. adjust lands the ciphertext on
+    // the layer's output modulus and pins its scale, which is what lets a
+    // layer drop more than one level and keeps the offline-encoded bias
+    // addable.
+    flex.adjust(*res, *res, lyr.mod_to, lyr.scale_to);
+
+    // Key-less fold by doubling: tau_a . tau_b = tau_(a+b), so after the
+    // step-s*f automorphism the accumulator holds twice as many cosets --
+    // log2(F) automorphisms rather than F-1 keyed rotations. Each is a bare
+    // permutation: no key, no level, no scale change, no noise growth.
+    if (lyr.keyless_fold) {
+        auto tmp = ICiphertext::make(EncType::RLWE);
+        for (u32 f = lyr.fold_factor / 2; f >= 1; f /= 2) {
+            const i32 step = lyr.fold_stride * static_cast<i32>(f);
+            eval.frobMap(*res, frobPowForRot(step, LOG_DEGREE), *tmp);
+            eval.add(*res, *tmp, *res);
+        }
+    }
+
+    eval.add(*res, *lyr.bias, *res);
+
+    if (lyr.activate) {
+        auto sq = ICiphertext::make(EncType::RLWE);
+        eval.tensor(*res, *res, *sq);
+        eval.relin(*sq, *lyr.relin_key);
+        // The squaring must be followed by a rescale: MatrixVectorEval always
+        // encodes its diagonals at the input's scale, so carrying a squared
+        // scale into the next layer would put a 2^75 value under a 2^55
+        // modulus and wrap.
+        auto rescaled = ICiphertext::make(EncType::RLWE);
+        eval.rescale(*sq, *rescaled);
+        ct = std::move(rescaled);
+    } else {
+        ct = std::move(res);
+    }
+}
+
+//===========================================================================
+// Harness file formats
+//===========================================================================
+
+std::vector<std::vector<double>> readSamples(const std::string &path, u32 dim) {
+    std::ifstream f(path);
+    if (!f.good())
+        throw std::runtime_error("cannot open " + path);
+    std::vector<std::vector<double>> rows;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.find_first_not_of(" \t\r\n") == std::string::npos)
+            continue;
+        std::istringstream iss(line);
+        std::vector<double> row;
+        row.reserve(dim);
+        double v = 0.0;
+        while (iss >> v)
+            row.push_back(v);
+        if (row.size() != dim)
+            throw std::runtime_error(
+                "expected " + std::to_string(dim) + " values per line in " +
+                path + ", got " + std::to_string(row.size()));
+        rows.push_back(std::move(row));
+    }
+    if (rows.empty())
+        throw std::runtime_error("no data found in " + path);
+    return rows;
+}
+
+void writeSamples(const std::vector<std::vector<double>> &rows,
+                  const std::string &path) {
+    std::ofstream f(path);
+    if (!f.good())
+        throw std::runtime_error("cannot write " + path);
+    char buf[32];
+    for (const auto &row : rows) {
+        for (size_t i = 0; i < row.size(); ++i) {
+            std::snprintf(buf, sizeof(buf), "%.9g", row[i]);
+            f << buf;
+            if (i + 1 < row.size())
+                f << ' ';
+        }
+        f << '\n';
+    }
+    if (!f)
+        throw std::runtime_error("short write to " + path);
+}
+
+InstanceSize parseInstanceSize(int argc, char *argv[]) {
+    if (argc < 2 || !std::isdigit(static_cast<unsigned char>(argv[1][0])))
+        throw std::runtime_error(
+            std::string("usage: ") + argv[0] +
+            " <instance-size>   (0-SINGLE, 1-SMALL, 2-MEDIUM, 3-LARGE)");
+    const int v = std::stoi(argv[1]);
+    if (v < 0 || v > int(InstanceSize::LARGE))
+        throw std::runtime_error("instance size out of range: " +
+                                 std::to_string(v));
+    return static_cast<InstanceSize>(v);
+}
+
+Device targetDevice() {
+#ifdef MLP_WITH_CUDA
+    return Device::GPU_CUDA;
+#else
+    return Device::CPU;
+#endif
+}
+
+} // namespace mlp

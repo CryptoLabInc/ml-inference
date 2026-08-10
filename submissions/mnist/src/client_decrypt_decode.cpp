@@ -1,61 +1,62 @@
-// Copyright 2025 Google LLC
+// Copyright (c) 2026 Crypto Lab Inc.
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
+// This software is licensed under the terms of the Apache v2 License.
+// See the LICENSE.md file for details.
+//============================================================================
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-#include "utils.h"
-#include "iomanip"
-#include "limits"
+// Stage 8: decrypt the result ciphertexts and read the logits back out of the
+// slots. Logit r of image i within a ciphertext lives at slot r*128 + i.
 
-#include "mlp_encryption_utils.h"
+#include "mlp_pipeline.hpp"
 
-using namespace lbcrypto;
+#include <iostream>
 
+using namespace heaan;
+using namespace mlp;
 
-int main(int argc, char* argv[]) {
-    if (argc < 2 || !std::isdigit(argv[1][0])) {
-        std::cout << "Usage: " << argv[0] << " instance-size [--count_only]\n";
-        std::cout << "  Instance-size: 0-SINGLE, 1-SMALL, 2-MEDIUM, 3-LARGE\n";
-        return 0;
-    }
-    auto size = static_cast<InstanceSize>(std::stoi(argv[1]));
-    InstanceParams prms(size);
+int main(int argc, char *argv[]) try {
+    const auto size = parseInstanceSize(argc, argv);
+    const InstanceParams prms(size);
+    const Device dev = targetDevice();
 
-    CryptoContext<DCRTPoly> cc;
-    if (!Serial::DeserializeFromFile(prms.pubkeydir()/"cc.bin", cc,
-                                    SerType::BINARY)) {
-        throw std::runtime_error("Failed to get CryptoContext from  " + prms.pubkeydir().string());
-    }
-    PrivateKey<DCRTPoly> sk;
-    if (!Serial::DeserializeFromFile(prms.seckeydir()/"sk.bin", sk,
-                                    SerType::BINARY)) {
-        throw std::runtime_error("Failed to get secret key from  " + prms.seckeydir().string());
-    }
-    std::vector<Ciphertext<DCRTPoly>> ctxt;     
-    std::vector<Score> scores;
-    auto result_path = prms.model_scores_file();
-    std::ofstream out(result_path);
-    for (size_t i = 0; i < prms.getBatchSize(); ++i) {
-        auto ctxt_path = prms.ctxtdowndir()/("cipher_result_" + std::to_string(i) + ".bin");
-        if (!Serial::DeserializeFromFile(ctxt_path, ctxt, SerType::BINARY)) {
-            throw std::runtime_error("Failed to get ciphertext from " + ctxt_path.string());
+    const Levels levels = buildLevels();
+    const EnDecoder encoder = makeEncoder(levels);
+    const EnDecryptor encryptor{EncryptParams{DiscreteGaussian(NOISE_STDDEV)}};
+
+    auto sk = serial::loadAsPtr<ISecretKey>(
+        (prms.seckeydir() / SECRET_KEY_FILE).string(), dev);
+
+    const size_t batch = prms.getBatchSize();
+    const size_t n_ct = numCtxts(batch);
+
+    std::vector<std::vector<double>> scores;
+    scores.reserve(batch);
+
+    for (size_t j = 0; j < n_ct; ++j) {
+        const auto path = prms.ctxtdowndir() /
+                          ("cipher_result_" + std::to_string(j) + ".bin");
+        auto ct = serial::loadAsPtr<ICiphertext>(path.string(), dev);
+
+        auto ptxt = IPlaintext::make(PtxtType::NORMAL);
+        Message out;
+        encryptor.decrypt(*ct, *sk, *ptxt);
+        encoder.decode(*ptxt, out);
+        out.to(Device::CPU);
+
+        const size_t first = j * IMAGES_PER_CTXT;
+        const size_t count = std::min<size_t>(IMAGES_PER_CTXT, batch - first);
+        for (size_t i = 0; i < count; ++i) {
+            std::vector<double> logits(LABEL_DIM);
+            for (u32 r = 0; r < LABEL_DIM; ++r)
+                logits[r] = out[slotOf(r, static_cast<u32>(i))].real();
+            scores.push_back(std::move(logits));
         }
-        auto decrypted_output = mlp_decrypt(cc, ctxt, sk);
-        Score score;
-        for (int j = 0; j < MNIST_LABEL_DIM; ++j) {
-            score.score[j] = decrypted_output[j];
-        }
-        scores.push_back(score);
     }
-    write_scores(scores, result_path.c_str());
+
+    fs::create_directories(prms.iointermdir());
+    writeSamples(scores, prms.model_scores_file().string());
     return 0;
+} catch (const std::exception &e) {
+    std::cerr << "client_decrypt_decode: " << e.what() << "\n";
+    return 1;
 }
-
