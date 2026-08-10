@@ -1,9 +1,157 @@
 # Notes for the human — HEaaN2 ml-inference submission
 
-Companion to `RECON.md`. Phase 1 (recon), Phase 2 (HS implementation for single/small) and Phase 3
-(PCMM implementation for medium/large, added on your instruction) are complete; all four instance
-sizes pass through the unmodified harness. Latest round's decisions and questions are answered
-first; Phase 2's round-1 notes follow below that.
+Companion to `RECON.md`. Phase 1 (recon), Phase 2 (HS for single/small), Phase 3 (PCMM for
+medium/large) and Phase 4 (aligning with the Zn-multiplication precedent) are complete; all four
+instance sizes pass through the unmodified harness. Newest phase first.
+
+**Read Phase 4 first if you read nothing else** — it retracts a Phase 3 measurement, root-causes it
+to a mis-built CUDA library that was also inflating every other timing in this file, and flags two
+decisions I need from you.
+
+---
+
+## Phase 4: aligned with the Zn-multiplication precedent — and found two real problems doing it
+
+You pointed me at the [`zn-mul` HEaaN2 branch](https://github.com/CryptoLabInc/HEaaN2/tree/zn-mul)
+and the [Zn-multiplication submission](https://github.com/CryptoLabInc/Zn-multiplication/tree/CryptoLabInc).
+I read both in full. The structural lesson transferred cleanly; two things I checked *while*
+transferring it turned out to be broken, and both mattered more than the restructuring did.
+
+### What I adopted from the precedent
+
+The sibling submission vendors a **prebuilt HEaaN2** in-tree (`submission/install/` — headers, the
+`.so`, and the CMake package config) plus a `LICENSE` permitting redistribution solely for
+benchmark reproduction. Its `build_task.sh` is then five lines: no repo cloning, no SSH key, no
+`nvcc` hunting. That is a much better replication story than what we had, so:
+
+- **`submissions/mnist/install/`** now holds a prebuilt HEaaN2 (headers + `libheaan2.so.0.2.0`,
+  84 MB). A bare clone of this fork builds with **no private-repo access, no SSH key, and no HEaaN2
+  checkout.** Verified by building with `HEAAN2_ROOT`/`HEAAN2_DIR` unset.
+- **`LICENSE`** — copied **verbatim** from the sibling submission. It is CryptoLab's own legal text;
+  editing it was not mine to do. Please confirm it is the current version you want to ship.
+- **`LICENSE-THIRD-PARTY`** — *not* copied, because ours is a **CUDA** build and theirs is CPU-only
+  (their `build_task.sh` passes `-DBUILD_WITH_CUDA=OFF`, which is why their `.so` is 5.5 MB against
+  our 84 MB). I inspected our actual binary (`ldd`, `nm -D`, `strings`) and listed what it really
+  depends on: CUDA runtime + cuBLAS, `libtcmalloc`, OpenMP, libstdc++. Neither of the components
+  their file lists (GNU Quadmath, the Keccak/tweetfips202 code) appears in our binary's symbol
+  table, so copying their list would have been wrong in both directions.
+- **`build_task.sh`** now defaults to the vendored install; setting `HEAAN2_ROOT` opts back into the
+  from-source path (kept intact for rebuilding for a different GPU, or CPU-only).
+- **`CMakeLists.txt`** defaults `CMAKE_PREFIX_PATH` to `${CMAKE_CURRENT_SOURCE_DIR}/install`, same
+  as theirs.
+
+I did **not** adopt their directory layout (`submission/` at repo root, binaries in
+`target/release/`). Their harness is a *different* harness — it hardcodes
+`params.rootdir/"submission"/"target"/"release"` — whereas ours resolves
+`submissions/<dataset_name>/build/<stage>`. Copying their layout would break our harness contract.
+Same reasoning for their `<instance>`-string argv: ours is passed a numeric size.
+
+### Problem 1: the vendored library was built for the wrong GPU — and that was the "anomaly"
+
+Before shipping the binary I ran `cuobjdump` on it rather than trusting how it had been configured.
+It contained **sm_52 cubins and `compute_52` PTX only** — CMake's *default* architecture — despite
+the build being configured with `native` on a 5090.
+
+This is precisely the trap documented in `BUILDING.md`: HEaven's architecture fallback
+
+```cmake
+if(DEFINED CACHE{CMAKE_CUDA_ARCHITECTURES}) ... else() "75-real;80-real;89-real;120-real"
+```
+
+is unreachable, because CMake seeds that cache entry with `52` the instant CUDA is enabled. So the
+library still ran on the 5090 — by **JIT-compiling PTX at load**.
+
+**That is the real explanation for the ~9.3 s PCMM GPU evaluation I reported in Phase 3 and wrote up
+as an unexplained transient.** It was one-time PTX JIT, cached afterward in `~/.nv/ComputeCache`,
+which is exactly why it looked unreproducible when I re-ran it. My Phase 3 write-up guessed at
+kernel-launch overhead on a new architecture and said it "was not chased down." The guess was wrong
+and the number was an artifact of a mis-built dependency, not a property of the code.
+
+Rebuilt with `CMAKE_CUDA_ARCHITECTURES=120-real` (20/20 cubins sm_120, no PTX) and re-vendored:
+
+| size 2 PCMM evaluation | sm_52 + PTX JIT | sm_120 native |
+| --- | --- | --- |
+| first run, cold JIT cache | ~9.3 s | **0.046 s** |
+| subsequent runs | 0.109–0.124 s | 0.040–0.046 s |
+
+So the mis-build cost ~2.6× once warm *and* hid a multi-second first-run cliff whose absence
+depended on a cache outside the repo. **Every timing in `DESIGN.md` is now from the sm_120 build**,
+and the retraction is recorded there in full rather than quietly corrected.
+
+Worth noting the same mis-build was inflating the HS numbers too (size 0/1 evaluation went
+0.031 s → 0.016 s), so the Phase 2/3 figures were all measured on a hobbled library.
+
+### The A/B you should actually look at
+
+With a correct library, on the same node, same session, HS forced at sizes 2/3 for comparison:
+
+| | HS setup | HS eval | HS scored | PCMM setup | PCMM eval | PCMM scored |
+| --- | --- | --- | --- | --- | --- | --- |
+| size 2 (1000) | 4.34–4.39 s | **0.018 s** | 4.55–4.60 s | 0.19–0.22 s | 0.040–0.046 s | **0.44 s** |
+| size 3 (10000) | 4.35 s | 0.044 s | 4.66 s | 0.20 s | **0.042 s** | **0.57 s** |
+
+Your instruction to use PCMM at medium/large holds, but the mechanism is worth being precise about:
+**PCMM wins on setup, not arithmetic.** It needs no rotation keys at all (54 K of key material vs
+HS's 174.8 M), so it skips the ~4.4 s of key deserialization + diagonal encoding HS re-pays every
+run. On *pure evaluation* HS is still 2.4× faster at 1000 images, and the two only reach parity at
+10000. Since the harness scores wall-clock around the whole stage-7 process, PCMM is 8–10× ahead on
+the number that counts — but if HS's setup were ever amortized, HS would be the better choice at
+size 2. Also: PCMM's encrypted **input is 3.4× larger** (44.5 M vs 13.1 M), so it does not dominate
+on every axis.
+
+### Problem 2: the sibling submission's security citation does not transfer to our parameters
+
+Their security section closes with a real citation:
+[sparse-key-estimate](https://github.com/jdumezy/sparse-key-estimate/blob/master/Precomputed-Tables/128bits_security.md),
+and their numbers check out exactly — N = 2^16, hw = 32, log(PQ) = 114 ≤ the table's
+`logn=16, h=32` entry of 349. I fetched the table to see whether we could lean on the same source.
+
+**We cannot, as currently parameterised.** That table is indexed by *sparse* Hamming weights
+(columns h ∈ {32, 64, 128, 192, 256, 512, 1024}). Both our schemes use `hw = 0`, which in HEaaN2
+means a **uniform-ternary (dense)** secret — h ≈ 2n/3, off the right edge of the table. There is no
+row to read.
+
+Our `maxBits128` values sit near its densest column but don't match it (our 2^13 entry 214 equals
+its `h=1024` entry exactly; our 2^14 is 430 vs its 426; 2^15 is 868 vs 854), consistent with their
+documented provenance in HEaven's `maxBitsPolicy128()` rather than in this table. A dense key *is*
+at least as hard as an h=1024 one at the same (n, q), so reading off that column would be
+conservative — but that is an argument a reviewer accepts, not a citation, and the numeric drift
+shows the two are different analyses.
+
+Two coherent ways to close it, and it's a decision, not an oversight:
+
+1. **Keep `hw = 0`** and cite something valid for a dense key — a lattice-estimator run at our exact
+   (n, q, σ) points, or the HE standard. This is what the pending crypto review needs to produce.
+2. **Switch to a sparse key** (hw = 32) so the sibling submission's citation applies directly. This
+   is a real parameter change, not a docs edit: it changes noise growth, so the level schedule,
+   accuracy, and bottom-modulus headroom all need re-validating.
+
+Written up in `DESIGN.md §5`. Flagging it here because "the sibling submission already solved the
+security citation" is the natural assumption, and it isn't true for our parameter choice.
+
+### On the `hem-heaan-mlinf-submission` branch you offered
+
+**Not needed — I created no HEaaN2 branch.** I checked whether anything required a library change:
+the `zn-mul` branch's own diff against `dev` touches *only* files under `submission/` (its
+`git diff --stat origin/dev...origin/zn-mul -- . ':!submission'` is empty), i.e. even the sibling
+submission needed no core library edits. Ours likewise builds entirely against the public API. The
+one library-side thing we depend on, `HomEval::frobMap`, already exists on `hem-heaan-mlinf` (and on
+`hem-heaan-mlinf-frobmap` at `5502b04`, which the vendored binary was built from). If the crypto
+review later forces a parameter change that needs new library surface, that's when the branch will
+be worth making.
+
+### Two things I need you to confirm
+
+1. **The bench server's GPU.** The vendored library is sm_120-only, with no PTX fallback — so on any
+   other architecture it will fail at load rather than run slowly. If the bench server isn't a 5090,
+   `install/` must be rebuilt for it before measurements (`HEAAN2_CUDA_ARCH=<arch>`, instructions in
+   `BUILDING.md`). Given what Problem 1 turned out to be, I'd verify with `cuobjdump` on the bench
+   server rather than assuming.
+2. **The 84 MB binary in git.** That's over GitHub's 50 MB per-file warning threshold (under the
+   100 MB hard limit). The sibling submission's is 5.5 MB because it is CPU-only. If an 84 MB blob
+   in the fork is unacceptable, the options are Git LFS, a release-asset download in
+   `build_task.sh`, or shipping CPU-only and requiring a from-source build for GPU — all of which
+   change the replication story, so I didn't pick one unilaterally.
 
 ---
 
@@ -59,6 +207,7 @@ level than its input, because `x^2` here runs tensor→rescale→relin instead o
 tensor→relin→rescale).
 
 ### The one thing that looked wrong: PCMM's GPU eval time
+### — SUPERSEDED, see Phase 4 Problem 1: this was a mis-built library, root-caused and fixed
 
 Size 2 on GPU: **9.34 s** of server-reported eval, against **0.267 s** for the identical operation
 sequence on CPU — GPU **~35× slower**, the wrong direction, and inconsistent with HEaaN2's own

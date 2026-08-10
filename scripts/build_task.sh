@@ -26,85 +26,105 @@ NPROC=$(nproc 2>/dev/null || sysctl -n hw.ncpu || echo 4)
 # HEaaN2 path (submissions/mnist)
 # ============================================================
 if [[ "$(basename "$TASK_DIR")" == "mnist" ]]; then
-    # HEaaN2 is not redistributable, so it is not fetched here: point
-    # HEAAN2_ROOT at a checkout, or HEAAN2_DIR at an existing install tree.
-    HEAAN2_ROOT="${HEAAN2_ROOT:-$HOME/HEaaN2}"
-    HEAAN2_INSTALL="${HEAAN2_DIR:-$HEAAN2_ROOT/install}"
-    HEAAN2_BUILD_CUDA="${HEAAN2_BUILD_CUDA:-ON}"
-
-    # Which GPU architectures to emit cubins for. This MUST be passed: CMake
-    # always seeds CMAKE_CUDA_ARCHITECTURES in the cache with the compiler's
-    # default (52) as soon as CUDA is enabled, and HEaven's own fallback
-    #   if(DEFINED CACHE{CMAKE_CUDA_ARCHITECTURES}) ... else() "75-real;..."
-    # therefore never reaches its else branch. Left alone, the whole stack is
-    # built for sm_52 only, and every real GPU then has to JIT the embedded
-    # compute_52 PTX at load time -- which fails outright when the driver is
-    # older than the toolkit ("cudaErrorUnsupportedPtxVersion: the provided PTX
-    # was compiled with an unsupported toolchain", e.g. CUDA 12.8 nvcc against a
-    # 12.4-era 550.x driver). A -real cubin for the target needs no JIT and runs
-    # on any driver of the same CUDA major version, so naming the architectures
-    # fixes the failure and removes the JIT cost besides.
+    # HEaaN2 is vendored directly in submissions/mnist/install/ (headers plus a
+    # prebuilt libheaan2.so.0.2.0), the same pattern CryptoLab's own
+    # Zn-multiplication fhe-benchmarking submission uses -- see LICENSE and
+    # LICENSE-THIRD-PARTY in submissions/mnist/ for the terms that permit
+    # redistributing the prebuilt library there. This needs no private-repo
+    # access or SSH key: a bare clone of this fork builds standalone.
     #
-    # The default matches HEaaN2's own CMakePresets.json. Narrow it to the one
-    # architecture you run on for a much faster build (RTX 4090 -> "89-real",
-    # RTX 5090 -> "120-real"), or use "native" to detect the build host's GPU --
-    # but note "native" needs a visible device at configure time, so it is wrong
-    # on a GPU-less submit node. "120-real" requires CUDA >= 12.8.
-    HEAAN2_CUDA_ARCH="${HEAAN2_CUDA_ARCH:-75-real;80-real;89-real;120-real}"
-    [[ "$HEAAN2_BUILD_CUDA" == "ON" ]] || HEAAN2_CUDA_ARCH=""
+    # The vendored library was built "native" for the development machine's
+    # GPU (RTX 5090, sm_120/Blackwell). If the official benchmark hardware
+    # uses a different GPU architecture, rebuild HEaaN2 for it (see the
+    # from-source path below) and replace submissions/mnist/install/ before
+    # running official measurements -- see submissions/mnist/README.md.
+    HEAAN2_BUILD_CUDA="${HEAAN2_BUILD_CUDA:-ON}"
+    HEAAN2_INSTALL="${HEAAN2_DIR:-$TASK_DIR/install}"
 
-    # Build HEaaN2 in a directory of this script's own, NOT $HEAAN2_ROOT/build.
-    # That path is what HEaaN2's own CMakePresets.json uses as binaryDir, with
-    # -G Ninja -- so any checkout that has ever been configured by hand already
-    # holds a cache there whose generator, compiler and CUDA toolkit differ from
-    # what this script asks for. CMake cannot reconcile that, and the failure is
-    # not local to the top-level cache: FetchContent's per-dependency sub-builds
-    # inherit the generator, so the configure dies inside CPM with
-    #   "generator : Ninja / Does not match the generator used previously:
-    #    Unix Makefiles"
-    # while a stale CUDAToolkit_ROOT quietly pins the wrong CUDA. Nesting one
-    # level down keeps this tree inside HEaaN2's .gitignore ("build/") without
-    # sharing that cache, and leaves a developer's own build untouched.
-    HEAAN2_BUILD="${HEAAN2_BUILD_DIR:-$HEAAN2_ROOT/build/ml-inference}"
+    if [[ -n "${HEAAN2_ROOT:-}" ]]; then
+        # Opt-in: build HEaaN2 from a source checkout instead of using the
+        # vendored copy above -- e.g. to target a different GPU architecture,
+        # or to build without CUDA (HEAAN2_BUILD_CUDA=OFF).
+        HEAAN2_INSTALL="${HEAAN2_DIR:-$HEAAN2_ROOT/install}"
 
-    # nvcc is frequently not on PATH when this script runs (CMake picks it up
-    # from CUDACXX or a previous cache), yet both configures below need it: the
-    # HEaaN2 build compiles .cu, and the submission calls find_package(CUDAToolkit).
-    # Look in the same places CMake would, once, and reuse the answer for both.
-    # $CONDA_PREFIX/bin comes before PATH deliberately. A conda env's bin is not
-    # necessarily the first PATH entry -- a system /usr/local/cuda-*/bin exported
-    # from /etc/profile.d or a login profile can sit ahead of it, in which case a
-    # bare "command -v nvcc" reports a toolkit that heaven-dev-cuda was activated
-    # precisely to override. CMake itself resolves nvcc through the prefix of the
-    # running cmake (i.e. the conda env), so trusting PATH here would also hand
-    # the submission a CUDAToolkit_ROOT that disagrees with the one HEaaN2 was
-    # compiled against.
-    if [[ "$HEAAN2_BUILD_CUDA" == "ON" && -z "${HEAAN2_NVCC:-}" ]]; then
-        for _cand in "${CUDACXX:-}" \
-                     "${CONDA_PREFIX:-}/bin/nvcc" \
-                     "$(command -v nvcc 2>/dev/null || true)" \
-                     "$(sed -n 's/^CMAKE_CUDA_COMPILER:[A-Z]*=//p' \
-                          "$HEAAN2_BUILD/CMakeCache.txt" 2>/dev/null | head -1)"; do
-            if [[ -n "$_cand" && -x "$_cand" ]]; then
-                HEAAN2_NVCC="$_cand"
-                break
+        # Which GPU architectures to emit cubins for. This MUST be passed: CMake
+        # always seeds CMAKE_CUDA_ARCHITECTURES in the cache with the compiler's
+        # default (52) as soon as CUDA is enabled, and HEaven's own fallback
+        #   if(DEFINED CACHE{CMAKE_CUDA_ARCHITECTURES}) ... else() "75-real;..."
+        # therefore never reaches its else branch. Left alone, the whole stack is
+        # built for sm_52 only, and every real GPU then has to JIT the embedded
+        # compute_52 PTX at load time -- which fails outright when the driver is
+        # older than the toolkit ("cudaErrorUnsupportedPtxVersion: the provided PTX
+        # was compiled with an unsupported toolchain", e.g. CUDA 12.8 nvcc against a
+        # 12.4-era 550.x driver). A -real cubin for the target needs no JIT and runs
+        # on any driver of the same CUDA major version, so naming the architectures
+        # fixes the failure and removes the JIT cost besides.
+        #
+        # The default matches HEaaN2's own CMakePresets.json. Narrow it to the one
+        # architecture you run on for a much faster build (RTX 4090 -> "89-real",
+        # RTX 5090 -> "120-real"), or use "native" to detect the build host's GPU --
+        # but note "native" needs a visible device at configure time, so it is wrong
+        # on a GPU-less submit node. "120-real" requires CUDA >= 12.8.
+        HEAAN2_CUDA_ARCH="${HEAAN2_CUDA_ARCH:-75-real;80-real;89-real;120-real}"
+        [[ "$HEAAN2_BUILD_CUDA" == "ON" ]] || HEAAN2_CUDA_ARCH=""
+
+        # Build HEaaN2 in a directory of this script's own, NOT $HEAAN2_ROOT/build.
+        # That path is what HEaaN2's own CMakePresets.json uses as binaryDir, with
+        # -G Ninja -- so any checkout that has ever been configured by hand already
+        # holds a cache there whose generator, compiler and CUDA toolkit differ from
+        # what this script asks for. CMake cannot reconcile that, and the failure is
+        # not local to the top-level cache: FetchContent's per-dependency sub-builds
+        # inherit the generator, so the configure dies inside CPM with
+        #   "generator : Ninja / Does not match the generator used previously:
+        #    Unix Makefiles"
+        # while a stale CUDAToolkit_ROOT quietly pins the wrong CUDA. Nesting one
+        # level down keeps this tree inside HEaaN2's .gitignore ("build/") without
+        # sharing that cache, and leaves a developer's own build untouched.
+        HEAAN2_BUILD="${HEAAN2_BUILD_DIR:-$HEAAN2_ROOT/build/ml-inference}"
+
+        # nvcc is frequently not on PATH when this script runs (CMake picks it up
+        # from CUDACXX or a previous cache), yet both configures below need it: the
+        # HEaaN2 build compiles .cu, and the submission calls find_package(CUDAToolkit).
+        # Look in the same places CMake would, once, and reuse the answer for both.
+        # $CONDA_PREFIX/bin comes before PATH deliberately. A conda env's bin is not
+        # necessarily the first PATH entry -- a system /usr/local/cuda-*/bin exported
+        # from /etc/profile.d or a login profile can sit ahead of it, in which case a
+        # bare "command -v nvcc" reports a toolkit that heaven-dev-cuda was activated
+        # precisely to override. CMake itself resolves nvcc through the prefix of the
+        # running cmake (i.e. the conda env), so trusting PATH here would also hand
+        # the submission a CUDAToolkit_ROOT that disagrees with the one HEaaN2 was
+        # compiled against.
+        if [[ "$HEAAN2_BUILD_CUDA" == "ON" && -z "${HEAAN2_NVCC:-}" ]]; then
+            for _cand in "${CUDACXX:-}" \
+                         "${CONDA_PREFIX:-}/bin/nvcc" \
+                         "$(command -v nvcc 2>/dev/null || true)" \
+                         "$(sed -n 's/^CMAKE_CUDA_COMPILER:[A-Z]*=//p' \
+                              "$HEAAN2_BUILD/CMakeCache.txt" 2>/dev/null | head -1)"; do
+                if [[ -n "$_cand" && -x "$_cand" ]]; then
+                    HEAAN2_NVCC="$_cand"
+                    break
+                fi
+            done
+        fi
+
+        # nvcc probes bare "gcc" for a version, then prepends its own bin/ to PATH
+        # before running it. If this script runs without the HEaaN2 conda toolchain
+        # env active, those are two different gccs: it probes the system one but
+        # preprocesses with conda's, whose libstdc++ headers use builtins the probed
+        # version does not advertise, so even CUDA compiler *detection* fails. Pin
+        # the host compiler to the toolchain that ships alongside nvcc so they agree.
+        if [[ -z "${HEAAN2_CUDA_HOST_COMPILER:-}" && -n "${HEAAN2_NVCC:-}" ]] \
+           && [[ -x "$(dirname "$HEAAN2_NVCC")/g++" ]]; then
+            HEAAN2_CUDA_HOST_COMPILER="$(dirname "$HEAAN2_NVCC")/g++"
+        fi
+
+        if [[ ! -f "$HEAAN2_INSTALL/lib/cmake/HEaaN2/HEaaN2Config.cmake" ]]; then
+            if [[ ! -f "$HEAAN2_ROOT/CMakeLists.txt" ]]; then
+                echo "[build_task] ERROR: no HEaaN2 install at $HEAAN2_INSTALL and" >&2
+                echo "             no source tree at $HEAAN2_ROOT." >&2
+                exit 1
             fi
-        done
-    fi
 
-    # nvcc probes bare "gcc" for a version, then prepends its own bin/ to PATH
-    # before running it. If this script runs without the HEaaN2 conda toolchain
-    # env active, those are two different gccs: it probes the system one but
-    # preprocesses with conda's, whose libstdc++ headers use builtins the probed
-    # version does not advertise, so even CUDA compiler *detection* fails. Pin
-    # the host compiler to the toolchain that ships alongside nvcc so they agree.
-    if [[ -z "${HEAAN2_CUDA_HOST_COMPILER:-}" && -n "${HEAAN2_NVCC:-}" ]] \
-       && [[ -x "$(dirname "$HEAAN2_NVCC")/g++" ]]; then
-        HEAAN2_CUDA_HOST_COMPILER="$(dirname "$HEAAN2_NVCC")/g++"
-    fi
-
-    if [[ ! -f "$HEAAN2_INSTALL/lib/cmake/HEaaN2/HEaaN2Config.cmake" ]]; then
-        if [[ -f "$HEAAN2_ROOT/CMakeLists.txt" ]]; then
             # HEaaN2 pulls private CryptoLabInc deps (HEaven, hem) that CPM asks for
             # over https, which cannot prompt for a password in a non-interactive build.
             # If an SSH key can reach GitHub, rewrite those URLs for the duration of
@@ -139,20 +159,28 @@ if [[ "$(basename "$TASK_DIR")" == "mnist" ]]; then
                   -DCMAKE_INSTALL_PREFIX="$HEAAN2_INSTALL"
             cmake --build "$HEAAN2_BUILD" --target install -j"$NPROC"
         else
-            echo "[build_task] ERROR: no HEaaN2 install at $HEAAN2_INSTALL and" >&2
-            echo "             no source tree at $HEAAN2_ROOT." >&2
-            echo "             Set HEAAN2_ROOT to a HEaaN2 checkout, or HEAAN2_DIR" >&2
-            echo "             to an existing install prefix. See" >&2
-            echo "             submissions/mnist/BUILDING.md." >&2
-            exit 1
+            echo "[build_task] Using HEaaN2 install at $HEAAN2_INSTALL"
         fi
+    elif [[ ! -f "$HEAAN2_INSTALL/lib/cmake/HEaaN2/HEaaN2Config.cmake" ]]; then
+        echo "[build_task] ERROR: no vendored HEaaN2 install at $HEAAN2_INSTALL." >&2
+        echo "             Set HEAAN2_DIR to an existing install prefix, or" >&2
+        echo "             HEAAN2_ROOT to a HEaaN2 source checkout to build one." >&2
+        echo "             See submissions/mnist/README.md." >&2
+        exit 1
     else
-        echo "[build_task] Using HEaaN2 install at $HEAAN2_INSTALL"
+        echo "[build_task] Using vendored HEaaN2 install at $HEAAN2_INSTALL"
     fi
+
+    # CMake resolves a relative CMAKE_PREFIX_PATH against the *build* directory,
+    # not the invocation directory, so "./submissions/mnist/install" (which is
+    # what $TASK_DIR/install expands to when the harness calls this script from
+    # the repo root) would silently fail to be found. Make it absolute first.
+    HEAAN2_INSTALL="$(cd -- "$HEAAN2_INSTALL" && pwd)"
 
     echo "[build_task] Configuring the HEaaN2 MNIST submission..."
     # HEaaN2Config.cmake does find_dependency(CUDAToolkit), which only searches
-    # PATH for nvcc -- point it at the toolkit we already located instead.
+    # PATH for nvcc -- point it at the toolkit we already located instead, if
+    # this build resolved one (only the from-source path above does).
     env -u HEAAN2_ROOT cmake -S "$TASK_DIR" -B "$BUILD" \
           -DCMAKE_BUILD_TYPE=Release \
           -DBUILD_WITH_CUDA="$HEAAN2_BUILD_CUDA" \

@@ -21,7 +21,8 @@ fixed executable names, `<size>` as the only argv) is unchanged.
 > **not finalised** — see [DESIGN.md §5](DESIGN.md#5-security). Do not cite this submission's
 > parameters as reviewed.
 
-- **[BUILDING.md](BUILDING.md)** — requirements, access, build from a fresh clone, running the
+- **[BUILDING.md](BUILDING.md)** — requirements, build from a fresh clone (no HEaaN2 source or
+  private-repo access needed: a prebuilt HEaaN2 is vendored in [`install/`](install/)), running the
   instance sizes, which of the three machines to use, environment variables, troubleshooting.
 - **[DESIGN.md](DESIGN.md)** — the circuit, both schemes' parameters and level schedules, cleartext
   pre/post-processing, deviation from the harness's reference model, results, and the security
@@ -29,6 +30,13 @@ fixed executable names, `<size>` as the only argv) is unchanged.
 
 ## Licence
 
-Submission code: Apache-2.0, as the repository. It uses only HEaaN2's **public API**; no HEaaN2
-source is vendored here. HEaaN2 itself is proprietary to Crypto Lab Inc. and must be obtained
-separately.
+Submission code (`src/`, `include/`, `CMakeLists.txt`, `weights/`): Apache-2.0, as the repository.
+It uses only HEaaN2's **public API** — none of HEaaN2's own implementation source is in this repo.
+
+[`install/`](install/) carries a **prebuilt** HEaaN2 (public headers + `libheaan2.so.0.2.0`), which
+is proprietary to Crypto Lab Inc. and is *not* under Apache-2.0. It is redistributed here under
+[LICENSE](LICENSE), which permits use solely for reproducing and verifying benchmark results —
+the same arrangement CryptoLab's
+[Zn-multiplication submission](https://github.com/CryptoLabInc/Zn-multiplication/tree/CryptoLabInc)
+uses. Third-party components and runtime dependencies of that binary are listed in
+[LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY).

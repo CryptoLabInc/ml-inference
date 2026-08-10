@@ -5,9 +5,14 @@
 # ---------------------------------------------------------------------------
 # HEaaN2 MNIST MLP submission.
 #
-# Built against the HEaaN2 *public* API only: no HEaaN2 source is vendored
-# here. Point CMAKE_PREFIX_PATH at a HEaaN2 install tree (scripts/build_task.sh
-# does this from $HEAAN2_ROOT).
+# Built against the HEaaN2 *public* API only -- this repo carries none of
+# HEaaN2's own implementation source. It does carry a prebuilt HEaaN2 install
+# (public headers + libheaan2.so.0.2.0) vendored under install/, the same
+# pattern CryptoLab's own Zn-multiplication fhe-benchmarking submission uses;
+# see LICENSE and LICENSE-THIRD-PARTY in this directory. That means a bare
+# clone of this fork builds with no private-repo access or SSH key needed.
+# Point CMAKE_PREFIX_PATH elsewhere (scripts/build_task.sh does this from
+# $HEAAN2_DIR / $HEAAN2_ROOT) to use a different install or build from source.
 
 cmake_minimum_required(VERSION 3.23)
 project(
@@ -22,6 +27,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
+endif()
+
+if(NOT CMAKE_PREFIX_PATH)
+  set(CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/install")
 endif()
 
 option(BUILD_WITH_CUDA "Build the submission against the CUDA HEaaN2 backend" ON)

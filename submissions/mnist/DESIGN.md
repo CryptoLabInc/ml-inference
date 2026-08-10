@@ -227,53 +227,94 @@ produced only on confirmed hardware, which here means the exclusive bench server
 ([which machine](BUILDING.md#which-machine)). A shared node also means these timings carry whatever
 else was running at the time.
 
-### HS (single, small) — GPU, RTX 5090 via `srun`
+All figures below are from a HEaaN2 built **natively for sm_120**, verified with `cuobjdump`
+(20/20 cubins sm_120, no PTX). That verification is not incidental — see
+[the retraction](#retracted-the-first-gpu-pcmm-numbers-were-measured-on-a-mis-built-library) at the
+end of this section.
 
-| | size 0 (1) | size 1 (100) |
-| --- | --- | --- |
-| harness `Encrypted computation` (wall) | 4.56 s | 4.59 s |
-| ├─ server-reported model setup | 4.34 s | 4.37 s |
-| └─ server-reported evaluation | **0.031 s** | **0.032 s** |
-| Public + evaluation keys | 174.8 M | 174.8 M |
-| Encrypted input | 1.6 M | 1.6 M |
-| Encrypted results | 480 K | 480 K |
-| Total harness latency | 10.8 s | 73.7 s |
-| **Encrypted-model accuracy** | PASS | **0.9800** |
-| Harness plaintext model | — | 0.9700 |
+### All four sizes, as shipped
 
-### PCMM (medium, large) — correctness verified on both CPU and GPU
+| | size 0 (1) HS | size 1 (100) HS | size 2 (1000) PCMM | size 3 (10000) PCMM |
+| --- | --- | --- | --- | --- |
+| harness `Encrypted computation` (wall) | 4.63 s | 4.65 s | **0.44 s** | **0.57 s** |
+| ├─ server-reported model setup | 4.44 s | 4.46 s | 0.19–0.22 s | 0.20 s |
+| └─ server-reported evaluation | 0.016 s | 0.016 s | 0.040–0.046 s | 0.042 s |
+| Public + evaluation keys | 174.8 M | 174.8 M | **54.0 K** | **54.0 K** |
+| Encrypted input | 1.6 M | 1.6 M | 44.5 M | 133.6 M |
+| Encrypted results | 480 K | 480 K | 280 K | 840 K |
+| **Encrypted-model accuracy** | PASS | **0.9800** | **0.9890** | **0.9796** |
+| Harness plaintext model | — | 0.9700 | 0.9820 | 0.9776 |
 
-| | size 2 (1000), CPU | size 3 (10000), CPU | size 2 (1000), GPU |
+### Why PCMM at medium/large: a controlled A/B on the same node
+
+The scheme split is not taken on faith. Both schemes were built and run against the same instances,
+on the same machine, in the same session, against the same sm_120 library (HS forced at sizes 2/3 by
+temporarily overriding `usePcmm`). They differ in *opposite directions* on the two halves of the
+server's work:
+
+| size 2 (1000 images) | HS | PCMM | |
 | --- | --- | --- | --- |
-| harness `Encrypted computation` (wall) | 0.45 s | 1.00 s | 9.82 s |
-| ├─ server-reported model setup | 0.11 s | 0.12 s | 0.24 s |
-| └─ server-reported evaluation | 0.267 s | 0.700 s | 9.34 s |
-| Public + evaluation keys | 54.0 K | 54.0 K | 54.0 K |
-| Encrypted input | 44.5 M | 133.6 M | 44.5 M |
-| Encrypted results | 280 K | 840 K | 280 K |
-| **Encrypted-model accuracy** | **0.9890** | **0.9796** | **0.9880** |
-| Harness plaintext model | 0.9820 | 0.9776 | 0.9820 |
+| model setup (key load + weight encoding) | 4.34–4.39 s | **0.19–0.22 s** | PCMM ~21× faster |
+| evaluation only | **0.018 s** | 0.040–0.046 s | HS ~2.4× faster |
+| **`Encrypted computation` (what the harness scores)** | 4.55–4.60 s | **0.44 s** | **PCMM ~10× faster** |
+| public + evaluation keys | 174.8 M | **54.0 K** | PCMM ~3300× smaller |
+| encrypted input | **13.1 M** | 44.5 M | HS ~3.4× smaller |
 
-CPU figures are from a full harness run on an isolated CPU-only HEaaN2 install
-(`HEAAN2_BUILD_CUDA=OFF`); GPU figures are from the same shared RTX 5090 node the HS numbers above
-came from. **Read the GPU eval row with real skepticism before quoting it anywhere:**
+| size 3 (10000 images) | HS | PCMM | |
+| --- | --- | --- | --- |
+| model setup | 4.35 s | **0.20 s** | PCMM ~22× faster |
+| evaluation only | 0.044 s | **0.042 s** | roughly equal |
+| **`Encrypted computation`** | 4.66 s | **0.57 s** | **PCMM ~8× faster** |
 
-- The GPU number (9.34 s) is **~35× slower than the same batch on CPU** (0.267 s) for the identical
-  operation sequence — the opposite of the expected direction, and the opposite of what the
-  standalone `HEaaN2/mlp/PCMM/MLInference_Large` benchmark reports on its own hardware
-  (2.54 ms/1000 images). Accuracy is correct on both (0.988 GPU vs 0.989 CPU — the half-point gap
-  is independent encryption noise on a different random draw of the same seed, not a bug), so this
-  is a *performance* anomaly, not a correctness one.
-- The likely explanation is fixed per-kernel-launch overhead not being amortized: PCMM's `pcmm`/
-  `tensor`/`relin` calls at N=2^13 are individually tiny compared to HS's N=2^17 operations, and
-  this GPU is a very recent architecture (RTX 5090, sm_120/Blackwell) that a research library's
-  kernels may not yet be well-tuned for. This is a hypothesis, not a diagnosis — it was not chased
-  further; see the note below.
-- **We did not attempt to root-cause or optimize this.** The user separately measured PCMM as
-  *faster* than HS at medium/large on GPU, on hardware other than this shared dev node, which is
-  the basis for choosing PCMM at these sizes at all. This dev box's GPU PCMM timing should be
-  treated as unreliable and re-measured on the actual benchmark server before any performance claim
-  is published — see `NOTES_FOR_HUMAN.md`.
+**PCMM wins decisively on the metric the harness scores, and the reason is setup, not arithmetic.**
+Deserializing 174.8 M of rotation keys and encoding weight diagonals costs HS ~4.4 s *every run*,
+at every instance size. PCMM needs **no rotation keys at all** — 54 K of key material, essentially
+just the relinearization key — so its setup is near-free. Since the harness times the whole stage-7
+process, that fixed cost is what gets scored.
+
+On pure evaluation the two cross over right about where the split is placed: HS is ~2.4× faster at
+1000 images, and by 10000 they are level (0.044 vs 0.042 s). That is the expected shape — PCMM's
+GEMM amortizes better as the batch grows — and it means the split at medium/large is the right
+call on *both* halves at size 3, and on the scored metric at size 2.
+
+Two honest qualifications:
+
+- At size 2, if HS's setup were amortized (a long-running server loading keys once), **HS would be
+  the faster choice on evaluation** by ~2.4×. The split as shipped is right *for this benchmark's
+  cost model*, which re-pays setup on every run; it is not a claim that PCMM's arithmetic is faster
+  at every batch size.
+- PCMM's **encrypted input is larger**, not smaller (44.5 M vs 13.1 M at size 2). PCMM wins on
+  compute and key material and loses on upload bandwidth; it does not dominate on every axis.
+
+### Retracted: the first GPU PCMM numbers were measured on a mis-built library
+
+An earlier revision of this document reported PCMM's GPU evaluation as **~9.3 s** at size 2 —
+~35× slower than the same batch on CPU — and flagged it as an unexplained anomaly, guessing at
+kernel-launch overhead on a new architecture. **The measurement was real; the explanation was
+wrong, and so was the number's relevance.**
+
+Root cause, found by running `cuobjdump` on the library rather than trusting how it was configured:
+the HEaaN2 build in use contained **sm_52 cubins and `compute_52` PTX only** — CMake's default
+architecture. HEaven's own architecture-selection fallback is unreachable once CMake seeds
+`CMAKE_CUDA_ARCHITECTURES` in the cache (see
+[why `HEAAN2_CUDA_ARCH` has to be passed](BUILDING.md#environment-variables)), so a build that looks
+correctly configured silently targets sm_52. That library still *runs* on an RTX 5090 — by
+JIT-compiling its PTX at load — which is exactly what the 9.3 s was: one-time JIT, not computation.
+Subsequent runs hit `~/.nv/ComputeCache` and dropped to ~0.12 s, which is why the figure looked
+like an unreproducible transient.
+
+Rebuilding with `CMAKE_CUDA_ARCHITECTURES=120-real` fixed both halves of the problem:
+
+| size 2 PCMM evaluation | sm_52 + PTX JIT | sm_120 native |
+| --- | --- | --- |
+| first run on a cold JIT cache | ~9.3 s | **0.046 s** |
+| subsequent runs | 0.109–0.124 s | 0.040–0.046 s |
+
+So the mis-built library was both ~2.6× slower once warm *and* carried a multi-second first-run
+cliff that made timings depend on a cache outside the repo. Every number in this section is from the
+sm_120 build. Two lessons worth keeping: **verify a CUDA library's architectures before quoting any
+timing from it**, and treat "unexplained transient" as a hypothesis to falsify, not a caveat to
+publish.
 
 ### Against the reference OpenFHE submission recorded in `measurements/`
 
@@ -294,10 +335,11 @@ Caveats worth stating before anyone quotes the ratios:
 2. **The evaluation figures are cold.** Every stage is a fresh process, so the first homomorphic
    operation pays context and kernel initialization that a long-running server would amortize. The
    equivalent warm figure from HEaaN2's own standalone HS benchmark is ~1 ms per 128 images.
-3. **Machines differ across rows above.** The reference numbers in `measurements/` are CPU; our HS
-   figures are GPU; our PCMM figures span both CPU and GPU on this dev node specifically because the
-   GPU number needed the CPU one alongside it to be legible at all. Do not compare evaluation
-   columns across machines as if they were the same hardware.
+3. **Machines differ across rows above.** The reference numbers in `measurements/` are CPU; ours
+   are GPU. Do not compare evaluation columns across those rows as if they were the same hardware.
+4. **This is a shared development node.** One measurement taken on it was already wrong by two
+   orders of magnitude (see the retraction above). Treat every timing here as indicative, and
+   re-measure on the bench server before publishing anything.
 
 ---
 
@@ -326,3 +368,37 @@ Everything a review would need to change is confined to one block of each of `ml
 `mlp::pcmm` in [`include/mlp_params.hpp`](include/mlp_params.hpp). This section must be replaced
 with a finalised justification before the submission is considered complete; per the benchmark
 rules a parameter claim that cannot be justified is recorded as a gap rather than asserted.
+
+### Why CryptoLab's Zn-multiplication citation does not transfer here
+
+The [Zn-multiplication submission](https://github.com/CryptoLabInc/Zn-multiplication/tree/CryptoLabInc)
+closes its own security section by citing
+[sparse-key-estimate](https://github.com/jdumezy/sparse-key-estimate/blob/master/Precomputed-Tables/128bits_security.md),
+whose table gives a 128-bit log(PQ) bound per (ring degree, secret Hamming weight). Its numbers line
+up exactly: N = 2^16, hw = 32, log(PQ) = 114 ≤ the table's `logn=16, h=32` entry of **349**.
+
+**That citation cannot be reused for this submission as parameterised**, and the reason is not
+cosmetic. That table is indexed by *sparse* Hamming weights — its columns are h ∈ {32, 64, 128, 192,
+256, 512, 1024}. Both of our schemes use `hw = 0`, which in HEaaN2 means a **uniform-ternary**
+(dense) secret, i.e. h ≈ 2n/3 — far outside every column. There is no row to read off.
+
+Our numbers are close to, but not identical to, that table's densest column (e.g. our
+`maxBits128(13) = 214` equals its `logn=13, h=1024` entry exactly, while our 2^14 entry is 430
+against its 426, and 2^15 is 868 against its 854), consistent with their stated provenance in
+HEaven's own `maxBitsPolicy128()` rather than in this table. Reading a dense key's bound off the
+h=1024 column would in principle be *conservative* — security increases with Hamming weight, so a
+uniform-ternary key is at least as hard as an h=1024 one at the same (n, q) — but "in principle
+conservative" is an argument a reviewer has to accept, not a citation, and the small numeric
+disagreements show the two sources are not the same analysis.
+
+So there are two coherent ways to close this, and it is a decision, not an oversight:
+
+1. **Keep `hw = 0` and cite something appropriate for a dense key** — a lattice-estimator run at our
+   exact (n, q, σ, dense-ternary) points, or the HE standard. This is what the pending crypto-side
+   review needs to supply.
+2. **Switch to a sparse key** (hw = 32, say) so the same public table the sibling submission cites
+   applies directly. This is a real parameter change, not a documentation edit: it alters the noise
+   growth the level schedule was tuned against, so accuracy and the bottom-modulus headroom would
+   both need re-validating.
+
+Recorded here so the gap is not mistaken for "the sibling submission already solved this."

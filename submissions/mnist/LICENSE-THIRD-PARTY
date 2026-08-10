@@ -1,0 +1,25 @@
+This software incorporates or depends on third-party projects under licenses as listed below.
+
+Verified for this specific build (submissions/mnist/install/lib/libheaan2.so.0.2.0, x86_64 Linux,
+CUDA-enabled) by inspecting its dynamic symbol table and runtime dependencies (`ldd`, `nm -D`,
+`strings`) rather than assumed from another build of the same library — different HEaaN2 build
+configurations (CPU vs CUDA, target architecture) can embed or link a different dependency set.
+
+No third-party source is statically embedded in this build (checked for the components CryptoLab's
+other HEaaN2-based benchmark submissions have listed, e.g. GNU Quadmath and the public-domain
+Keccak/tweetfips202 implementation from kyber — neither appears in this binary's symbol table).
+
+Runtime shared-library dependencies (dynamically linked, not redistributed here — must be present
+in the build/run environment separately):
+
+- OpenMP runtime (`libgomp.so.1`) — GNU General Public License v3 with the GCC Runtime Library
+  Exception. https://gcc.gnu.org/onlinedocs/libgomp/
+- gperftools `tcmalloc` (`libtcmalloc.so.4`) — BSD 3-Clause License.
+  https://github.com/gperftools/gperftools
+- NVIDIA CUDA Runtime and cuBLAS (`libcudart.so.12`, `libcublas.so.12`) — proprietary, under the
+  NVIDIA CUDA Toolkit End User License Agreement. Obtained separately via the CUDA Toolkit; not
+  bundled with this submission. https://docs.nvidia.com/cuda/eula/
+- GNU C++ standard library (`libstdc++.so.6`) — GNU General Public License v3 with the GCC Runtime
+  Library Exception.
+- Standard C runtime (`libc.so.6`, `libm.so.6`, `libgcc_s.so.1`) — GNU Lesser General Public
+  License v2.1 or later (glibc).
