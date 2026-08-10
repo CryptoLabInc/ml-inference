@@ -32,12 +32,63 @@ if [[ "$(basename "$TASK_DIR")" == "mnist" ]]; then
     HEAAN2_INSTALL="${HEAAN2_DIR:-$HEAAN2_ROOT/install}"
     HEAAN2_BUILD_CUDA="${HEAAN2_BUILD_CUDA:-ON}"
 
+    # nvcc is frequently not on PATH when this script runs (CMake picks it up
+    # from CUDACXX or a previous cache), yet both configures below need it: the
+    # HEaaN2 build compiles .cu, and the submission calls find_package(CUDAToolkit).
+    # Look in the same places CMake would, once, and reuse the answer for both.
+    if [[ "$HEAAN2_BUILD_CUDA" == "ON" && -z "${HEAAN2_NVCC:-}" ]]; then
+        for _cand in "${CUDACXX:-}" \
+                     "$(command -v nvcc 2>/dev/null || true)" \
+                     "${CONDA_PREFIX:-}/bin/nvcc" \
+                     "$(sed -n 's/^CMAKE_CUDA_COMPILER:[A-Z]*=//p' \
+                          "$HEAAN2_ROOT/build/CMakeCache.txt" 2>/dev/null | head -1)"; do
+            if [[ -n "$_cand" && -x "$_cand" ]]; then
+                HEAAN2_NVCC="$_cand"
+                break
+            fi
+        done
+    fi
+
+    # nvcc probes bare "gcc" for a version, then prepends its own bin/ to PATH
+    # before running it. If this script runs without the HEaaN2 conda toolchain
+    # env active, those are two different gccs: it probes the system one but
+    # preprocesses with conda's, whose libstdc++ headers use builtins the probed
+    # version does not advertise, so even CUDA compiler *detection* fails. Pin
+    # the host compiler to the toolchain that ships alongside nvcc so they agree.
+    if [[ -z "${HEAAN2_CUDA_HOST_COMPILER:-}" && -n "${HEAAN2_NVCC:-}" ]] \
+       && [[ -x "$(dirname "$HEAAN2_NVCC")/g++" ]]; then
+        HEAAN2_CUDA_HOST_COMPILER="$(dirname "$HEAAN2_NVCC")/g++"
+    fi
+
+    # HEaaN2 pulls private CryptoLabInc deps (HEaven, hem) that CPM asks for
+    # over https, which cannot prompt for a password in a non-interactive build.
+    # If an SSH key can reach GitHub, rewrite those URLs for the duration of
+    # this build only -- via GIT_CONFIG_*, so the user's git config is untouched.
+    # Set HEAAN2_GIT_SSH=0 to skip (e.g. if you use a credential helper instead).
+    # ("|| true" because a successful "ssh -T git@github.com" still exits 1, which
+    # pipefail would otherwise read as no SSH access.)
+    if [[ "${HEAAN2_GIT_SSH:-1}" == "1" ]] \
+       && { ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=10 \
+                -T git@github.com 2>&1 || true; } | grep -q 'successfully authenticated'; then
+        echo "[build_task] Routing github.com fetches over SSH for this build."
+        export GIT_CONFIG_COUNT=1
+        export GIT_CONFIG_KEY_0='url.git@github.com:.insteadOf'
+        export GIT_CONFIG_VALUE_0='https://github.com/'
+    fi
+
     if [[ ! -f "$HEAAN2_INSTALL/lib/cmake/HEaaN2/HEaaN2Config.cmake" ]]; then
         if [[ -f "$HEAAN2_ROOT/CMakeLists.txt" ]]; then
             echo "[build_task] Installing HEaaN2 from $HEAAN2_ROOT -> $HEAAN2_INSTALL"
+            [[ -n "${HEAAN2_CUDA_HOST_COMPILER:-}" ]] \
+                && echo "[build_task] CUDA host compiler: $HEAAN2_CUDA_HOST_COMPILER"
+            # Note: setting CMAKE_INSTALL_RPATH here would NOT stick -- HEaaN2's
+            # own install rules run file(RPATH_REMOVE) on libheaan2.so, so it ends
+            # up with no RPATH regardless. The submission compensates by linking
+            # its executables with DT_RPATH; see submissions/mnist/CMakeLists.txt.
             cmake -S "$HEAAN2_ROOT" -B "$HEAAN2_ROOT/build" \
                   -DCMAKE_BUILD_TYPE=Release \
                   -DBUILD_WITH_CUDA="$HEAAN2_BUILD_CUDA" \
+                  ${HEAAN2_CUDA_HOST_COMPILER:+-DCMAKE_CUDA_HOST_COMPILER="$HEAAN2_CUDA_HOST_COMPILER"} \
                   -DCMAKE_INSTALL_PREFIX="$HEAAN2_INSTALL"
             cmake --build "$HEAAN2_ROOT/build" --target install -j"$NPROC"
         else
@@ -53,9 +104,12 @@ if [[ "$(basename "$TASK_DIR")" == "mnist" ]]; then
     fi
 
     echo "[build_task] Configuring the HEaaN2 MNIST submission..."
+    # HEaaN2Config.cmake does find_dependency(CUDAToolkit), which only searches
+    # PATH for nvcc -- point it at the toolkit we already located instead.
     cmake -S "$TASK_DIR" -B "$BUILD" \
           -DCMAKE_BUILD_TYPE=Release \
           -DBUILD_WITH_CUDA="$HEAAN2_BUILD_CUDA" \
+          ${HEAAN2_NVCC:+-DCUDAToolkit_ROOT="$(dirname "$(dirname "$HEAAN2_NVCC")")"} \
           -DCMAKE_PREFIX_PATH="$HEAAN2_INSTALL"
 
     echo "[build_task] Compiling with $NPROC cores..."

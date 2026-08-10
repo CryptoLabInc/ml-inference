@@ -16,50 +16,113 @@ unmodified.
 
 | | |
 | --- | --- |
-| HEaaN2 | v0.2.0, built **with CUDA** and installed to a prefix |
 | GPU | CUDA device, compute capability ≥ 7.5. Developed on an RTX 5090 (sm_120) |
-| Toolchain | CMake ≥ 3.23, a C++17 compiler, OpenMP, OpenBLAS **including headers** (`cblas.h`) |
-| Python | the harness's own `requirements.txt` (torch 2.9.1, torchvision 0.24.1, numpy, absl-py) |
+| CUDA | **≥ 12.8** — sm_120 (Blackwell) is not supported by earlier toolkits |
+| HEaaN2 | v0.2.0, built **with CUDA**. Private; see [access](#access) |
+| Toolchain | CMake ≥ 3.23, GCC 14 (C++17), OpenMP, gperftools (`libtcmalloc`), OpenBLAS **including headers** (`cblas.h`) |
+| Python | the repo's `requirements.txt` (torch 2.9.1, torchvision 0.24.1, numpy, absl-py) |
 
-HEaaN2 is not redistributable, so `scripts/build_task.sh` does **not** fetch it. Point it at a
-checkout or an existing install:
+The toolchain row is satisfied in one step by HEaaN2's own conda environment — see step 3. Do not
+assemble it by hand; the GCC and CUDA versions have to match each other, and the failure when they
+do not is [obscure](#troubleshooting).
+
+### Access
+
+Three private Crypto Lab repositories are needed, and **all three are fetched over SSH**:
+
+| Repo | How it is obtained |
+| --- | --- |
+| `CryptoLabInc/HEaaN2` | you clone it (step 2) |
+| `CryptoLabInc/HEaven` | CPM fetches it during the HEaaN2 build |
+| `CryptoLabInc/hem` | CPM fetches it during the HEaaN2 build |
+
+You need a GitHub account with access to the `CryptoLabInc` org and a working SSH key
+(`ssh -T git@github.com` should greet you by name). CPM requests the two transitive deps over
+**https**, which cannot prompt for a password in a non-interactive build, so `scripts/build_task.sh`
+detects a usable SSH key and rewrites those URLs for the duration of the build. The rewrite is
+scoped to that one invocation via `GIT_CONFIG_*` — **your global git config is not modified.**
+
+### Replicating from a fresh clone
 
 ```bash
-export HEAAN2_ROOT=/path/to/HEaaN2      # a checkout; built and installed on first use
-# or, if HEaaN2 is already installed somewhere:
-export HEAAN2_DIR=/path/to/heaan2/install
-```
+# 1. the benchmark repo
+git clone git@github.com:yongwonchoi-Cryptolab/ml-inference.git
+cd ml-inference
+git checkout heaan2-mnist-submission
 
-If only `HEAAN2_ROOT` is set and no install exists yet, the build script configures and installs
-HEaaN2 into `$HEAAN2_ROOT/install` itself. Set `HEAAN2_BUILD_CUDA=OFF` for a CPU build (works, but
-is not what this submission is measured on).
+# 2. HEaaN2, anywhere you like
+git clone git@github.com:CryptoLabInc/HEaaN2.git ~/HEaaN2
+export HEAAN2_ROOT=~/HEaaN2
 
-### Running
+# 3. the toolchain: CUDA 12.8.1 + GCC 14.3 + CMake + ninja + gperftools + BLAS headers,
+#    pinned together. This is the step that makes the CUDA build work.
+conda env create -f $HEAAN2_ROOT/conda/heaven-dev-cuda.yml
+conda activate heaven-dev-cuda
 
-```bash
+# 4. python deps, in a venv layered on top (activate it *after* conda)
 python -m venv bmenv && source ./bmenv/bin/activate
 pip install -r requirements.txt
 
-srun python3 harness/run_submission.py 0 --seed 3     # single
-srun python3 harness/run_submission.py 1 --seed 3     # small (100)
-srun python3 harness/run_submission.py 2 --seed 3     # medium (1000)
-srun python3 harness/run_submission.py 3 --seed 3     # large (10000)
+# 5. build. HEaaN2 is configured, built and installed into $HEAAN2_ROOT/install on
+#    first use, then the submission is built against it. Takes a while.
+./scripts/build_task.sh ./submissions/mnist
+
+# 6. run
+python3 harness/run_submission.py 0 --seed 3
 ```
 
-**`srun` (or an equivalent allocation) is required on a shared Slurm node.** The harness invokes
-each stage binary through `subprocess.run`, and those children inherit the allocation, so one
-`srun` around the whole harness is enough — no harness change is needed. Run bare on a node with
-no CUDA device visible, stage 7 aborts with *"CUDA device is not available in the current
-environment"*.
+**Activation order in steps 3–4 matters.** The venv must come second so that `python3` resolves to
+it: the harness launches every stage through `subprocess.run(["python3", ...])`, which goes through
+`PATH`, so a venv that is merely *created* but not active leaves those children on the system
+interpreter — which has no `torch`. With both active, `python3` is the venv's and `gcc`/`nvcc` are
+conda's, which is what you want.
 
-The harness builds the submission itself. To build standalone:
+Step 5 is optional in practice — the harness runs `build_task.sh` itself on every invocation — but
+running it once on its own keeps build errors separate from run errors.
+
+### Running the other instance sizes
 
 ```bash
-HEAAN2_ROOT=/path/to/HEaaN2 ./scripts/build_task.sh ./submissions/mnist
+python3 harness/run_submission.py 0 --seed 3     # single
+python3 harness/run_submission.py 1 --seed 3     # small (100)
+python3 harness/run_submission.py 2 --seed 3     # medium (1000)
+python3 harness/run_submission.py 3 --seed 3     # large (10000)
 ```
+
+**On a shared Slurm node, prefix each with `srun`** (or an equivalent allocation). The harness
+invokes each stage binary through `subprocess.run`, and those children inherit the allocation, so
+one `srun` around the whole harness is enough — no harness change is needed. Run bare on a node
+with no CUDA device visible, stage 7 aborts with *"CUDA device is not available in the current
+environment"*.
+
+### Environment variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `HEAAN2_ROOT` | `$HOME/HEaaN2` | HEaaN2 checkout; built and installed on first use |
+| `HEAAN2_DIR` | `$HEAAN2_ROOT/install` | Use an **existing** HEaaN2 install and skip building it |
+| `HEAAN2_BUILD_CUDA` | `ON` | `OFF` gives a CPU build — works, but is not what this submission is measured on |
+| `HEAAN2_GIT_SSH` | `1` | `0` disables the https→SSH rewrite (use if you have a credential helper) |
+| `HEAAN2_NVCC` | auto | Path to `nvcc`, if detection picks the wrong one |
+| `HEAAN2_CUDA_HOST_COMPILER` | the `g++` beside `nvcc` | Host compiler nvcc drives |
+
+`scripts/build_task.sh` locates `nvcc` by checking `CUDACXX`, then `PATH`, then `$CONDA_PREFIX/bin`,
+then an existing `CMakeCache.txt`, so it works whether or not the conda env is active.
 
 `scripts/get_openfhe.sh` is left untouched and still runs: `submissions/cifar10` depends on
 OpenFHE, and the harness calls the script unconditionally. It is not used by this submission.
+
+### Troubleshooting
+
+| Symptom | Cause and fix |
+| --- | --- |
+| `Compiling the CUDA compiler identification source file "CMakeCUDACompilerId.cu" failed`, with `error: identifier "__is_array" is undefined` in `type_traits` | nvcc probed one `gcc` for a version but preprocessed with another, so one GCC's `libstdc++` headers got parsed in the other's language mode and its newer builtins came out undefined. nvcc prepends its own `bin/` to `PATH` before invoking the host compiler, so this appears whenever the conda env is *not* active: it probes the system `gcc` and then runs conda's. The build script pins the host compiler automatically; if it still happens, set `HEAAN2_CUDA_HOST_COMPILER` to the `g++` from `heaven-dev-cuda`. |
+| `fatal: could not read Username for 'https://github.com'` while cloning `HEaven` or `hem` | No usable SSH key, or no access to the `CryptoLabInc` org. Check `ssh -T git@github.com`. |
+| `Could not find nvcc executable in any searched paths, please set CUDAToolkit_ROOT` | `nvcc` is not on `PATH` and was not auto-detected. Activate `heaven-dev-cuda`, or set `HEAAN2_NVCC`. |
+| A wall of `undefined reference to 'cuda…@libcudart.so.12'` / `'cublas…@libcublas.so.12'` at link | A stale `submissions/mnist/build` from before the shared-CUDA fix. `rm -rf submissions/mnist/build` and rebuild. |
+| `error while loading shared libraries: libcudart.so.12` when a stage runs | Stage binaries built without `DT_RPATH`. `rm -rf submissions/mnist/build` and rebuild; as a stopgap, export `LD_LIBRARY_PATH=$CONDA_PREFIX/lib`. |
+| `ModuleNotFoundError: No module named 'torch'` from `generate_dataset.py` | The venv is not active, so the harness's `python3` children fall back to the system interpreter. `source ./bmenv/bin/activate`. |
+| `CUDA device is not available in the current environment` in stage 7 | No GPU visible. Use `srun` or an equivalent allocation. |
 
 ---
 

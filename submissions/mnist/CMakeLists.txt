@@ -37,7 +37,10 @@ set_target_properties(mlp_pipeline PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 if(BUILD_WITH_CUDA)
   find_package(CUDAToolkit REQUIRED)
-  target_link_libraries(mlp_pipeline PUBLIC CUDA::cudart_static)
+  # libheaan2.so has DT_NEEDED on the *shared* libcudart.so.12/libcublas.so.12
+  # and does not re-export them (its interface carries only OpenMP), so the
+  # static cudart cannot resolve its symbols -- link the shared pair here.
+  target_link_libraries(mlp_pipeline PUBLIC CUDA::cudart CUDA::cublas)
   # Selects Device::GPU_CUDA in mlp::targetDevice().
   target_compile_definitions(mlp_pipeline PUBLIC MLP_WITH_CUDA)
 endif()
@@ -63,4 +66,11 @@ foreach(stage ${MLP_STAGES})
   set_target_properties(${stage} PROPERTIES
     BUILD_WITH_INSTALL_RPATH FALSE
     INSTALL_RPATH_USE_LINK_PATH TRUE)
+  # ...and baked in as DT_RPATH rather than the modern default DT_RUNPATH.
+  # libheaan2.so needs libcudart/libcublas/libtcmalloc but carries no RPATH of
+  # its own -- HEaaN2's install rules run file(RPATH_REMOVE) on it -- and
+  # DT_RUNPATH is deliberately NOT consulted when resolving a *dependency's*
+  # dependencies, so the loader would fail on those three. DT_RPATH is
+  # inherited down the whole chain, which covers them.
+  target_link_options(${stage} PRIVATE "LINKER:--disable-new-dtags")
 endforeach()
