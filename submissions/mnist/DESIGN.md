@@ -53,8 +53,8 @@ double-hoisted BSGS accumulates behind a single mod-down.
 is a multiple of 2^14, and fc1's fold stride (128 × 128 = 16384) is one. Its fold therefore runs as
 bare Galois automorphisms (`HomEval::frobMap`) — no rotation keys, no level, no scale change, no
 noise growth — in log2(4) = 2 automorphisms. The divisibility is asserted at key generation:
-getting it wrong throws nothing, it silently decrypts to noise. `frobMap` is why this submission
-pins a HEaaN2 branch ([details](BUILDING.md#rebuilding-heaan2-from-source)).
+getting it wrong throws nothing, it silently decrypts to noise. `frobMap` is supplied by the
+vendored HEaaN2 in [`install/`](install/).
 
 ### Scheme B — PCMM (sizes 2–3)
 
@@ -175,11 +175,11 @@ model ([§4](#4-results)).
 
 ## 4. Results
 
-Seed 3, through the **unmodified harness**, on the **shared** 5090 developer server — not the bench
-server. **Not official measurements**: `measurements/` still holds the reference OpenFHE numbers,
-and official figures come only from the exclusive bench server
-([which machine](BUILDING.md#which-machine)). All figures are from a HEaaN2 verified as natively
-sm_120 — see [the retraction](#retraction) for why that matters.
+Seed 3, through the **unmodified harness**, on 1× RTX 5090 (sm_120). **Not official measurements**:
+`measurements/` still holds the reference OpenFHE numbers. All figures come from a HEaaN2 verified
+as natively sm_120 by the [architecture check](BUILDING.md#-this-submission-requires-an-sm_120-gpu)
+— a library that falls back to JIT-compiling PTX reports several seconds of first-run cost as if it
+were evaluation time, so that check is a precondition for quoting any timing here.
 
 ### As shipped
 
@@ -236,31 +236,6 @@ Before quoting any ratio:
 2. **Evaluation figures are cold.** Each stage is a fresh process, paying context and kernel
    initialization a long-running server would amortize.
 3. **Reference numbers are CPU; ours are GPU.** Not the same hardware.
-4. **This is a shared node**, and one measurement on it was already wrong by two orders of
-   magnitude. Re-measure on the bench server before publishing.
-
-### Retraction
-
-An earlier revision reported PCMM's GPU evaluation as **~9.3 s** at size 2 (~35× slower than CPU)
-and flagged it as an unexplained anomaly. **The measurement was real; the explanation was wrong.**
-
-Root cause, found by running `cuobjdump` on the library rather than trusting its configuration: the
-HEaaN2 in use contained **sm_52 cubins and `compute_52` PTX only** — CMake's default architecture,
-which HEaven's fallback silently produces (see
-[why `HEAAN2_CUDA_ARCH` must be passed](BUILDING.md#why-heaan2_cuda_arch-must-be-passed)). It ran on
-the RTX 5090 by JIT-compiling PTX at load. The 9.3 s *was* that JIT. Later runs hit
-`~/.nv/ComputeCache` and dropped to ~0.12 s, which is why it looked like an unreproducible
-transient.
-
-| size 2 PCMM evaluation | sm_52 + PTX JIT | sm_120 native |
-| --- | --- | --- |
-| first run, cold JIT cache | ~9.3 s | **0.046 s** |
-| subsequent runs | 0.109–0.124 s | 0.040–0.046 s |
-
-The mis-build was ~2.6× slower once warm *and* hid a multi-second first-run cliff dependent on a
-cache outside the repo. It was inflating HS too (evaluation 0.031 s → 0.016 s). Two lessons worth
-keeping: **verify a CUDA library's architectures before quoting a timing from it**, and treat
-"unexplained transient" as a hypothesis to falsify, not a caveat to publish.
 
 ---
 

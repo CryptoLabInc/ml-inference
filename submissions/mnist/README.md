@@ -14,7 +14,7 @@ OpenFHE/HEIR submission in this directory. The harness is unmodified.
 | Model | 2-layer MLP, `fc1(128×484) → x² → fc2(10×128)`, BN folded. Plaintext accuracy 97.96% |
 | Accuracy | 0.980 / 0.989 / 0.979 at sizes 1 / 2 / 3, against the harness model's 0.970 / 0.982 / 0.978 |
 | Scheme | CKKS on the conjugate-invariant subring, no bootstrapping |
-| Hardware | GPU. Vendored HEaaN2 binary is **sm_120 only** — [check before running elsewhere](BUILDING.md#requirements) |
+| Hardware | **NVIDIA sm_120 (Blackwell) GPU required** — the vendored HEaaN2 binary targets sm_120 only, with no PTX fallback. [Check first](BUILDING.md#-this-submission-requires-an-sm_120-gpu) |
 
 Two circuits, chosen by instance size alone (`mlp::usePcmm`) — same model, same weights, different
 packing:
@@ -32,7 +32,7 @@ Every stage binary dispatches internally, so the harness contract (seven fixed e
 ```bash
 pip install -r requirements.txt
 ./scripts/build_task.sh ./submissions/mnist     # uses the vendored HEaaN2 in install/
-srun python3 harness/run_submission.py 0 --seed 3
+python3 harness/run_submission.py 0 --seed 3    # prefix with srun under a scheduler
 ```
 
 No HEaaN2 checkout, private-repo access or SSH key needed. Details in

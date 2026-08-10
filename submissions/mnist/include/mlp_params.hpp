@@ -113,9 +113,9 @@ constexpr u32 NUM_MULTS = 3;
 // 2^(l-1), so those rotations need no keys at all.
 //
 // The >=128-bit claim for this configuration has NOT been signed off yet; the
-// numbers in swkMaxBits() are provisional and HW may change. See
-// NOTES_FOR_HUMAN.md and the "Security" section of README.md. Everything a
-// review would need to change is in this block.
+// numbers in swkMaxBits() are provisional and HW may change. See section 5,
+// "Security", of DESIGN.md. Everything a review would need to change is in
+// this block.
 //---------------------------------------------------------------------------
 
 constexpr u32 SMALL_LOG_DEGREE = 15; // degree the secret key is sampled at
@@ -293,7 +293,7 @@ constexpr u32 IN_P = INPUT_DIM + 1; // 485
 
 //---------------------------------------------------------------------------
 // SECURITY-RELEVANT PARAMETERS -- ANALYSIS PENDING, same status as the HS
-// scheme's block above and the same open item in NOTES_FOR_HUMAN.md. Unlike
+// scheme's block above and the same open item in DESIGN.md section 5. Unlike
 // HS, PCMM's secret key is sampled directly at its working degree (no
 // lifting), so its security rests on maxBits128(LOG_RLWE_DIM) alone with no
 // separate lifting argument to review.
