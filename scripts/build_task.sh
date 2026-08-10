@@ -32,16 +32,38 @@ if [[ "$(basename "$TASK_DIR")" == "mnist" ]]; then
     HEAAN2_INSTALL="${HEAAN2_DIR:-$HEAAN2_ROOT/install}"
     HEAAN2_BUILD_CUDA="${HEAAN2_BUILD_CUDA:-ON}"
 
+    # Build HEaaN2 in a directory of this script's own, NOT $HEAAN2_ROOT/build.
+    # That path is what HEaaN2's own CMakePresets.json uses as binaryDir, with
+    # -G Ninja -- so any checkout that has ever been configured by hand already
+    # holds a cache there whose generator, compiler and CUDA toolkit differ from
+    # what this script asks for. CMake cannot reconcile that, and the failure is
+    # not local to the top-level cache: FetchContent's per-dependency sub-builds
+    # inherit the generator, so the configure dies inside CPM with
+    #   "generator : Ninja / Does not match the generator used previously:
+    #    Unix Makefiles"
+    # while a stale CUDAToolkit_ROOT quietly pins the wrong CUDA. Nesting one
+    # level down keeps this tree inside HEaaN2's .gitignore ("build/") without
+    # sharing that cache, and leaves a developer's own build untouched.
+    HEAAN2_BUILD="${HEAAN2_BUILD_DIR:-$HEAAN2_ROOT/build/ml-inference}"
+
     # nvcc is frequently not on PATH when this script runs (CMake picks it up
     # from CUDACXX or a previous cache), yet both configures below need it: the
     # HEaaN2 build compiles .cu, and the submission calls find_package(CUDAToolkit).
     # Look in the same places CMake would, once, and reuse the answer for both.
+    # $CONDA_PREFIX/bin comes before PATH deliberately. A conda env's bin is not
+    # necessarily the first PATH entry -- a system /usr/local/cuda-*/bin exported
+    # from /etc/profile.d or a login profile can sit ahead of it, in which case a
+    # bare "command -v nvcc" reports a toolkit that heaven-dev-cuda was activated
+    # precisely to override. CMake itself resolves nvcc through the prefix of the
+    # running cmake (i.e. the conda env), so trusting PATH here would also hand
+    # the submission a CUDAToolkit_ROOT that disagrees with the one HEaaN2 was
+    # compiled against.
     if [[ "$HEAAN2_BUILD_CUDA" == "ON" && -z "${HEAAN2_NVCC:-}" ]]; then
         for _cand in "${CUDACXX:-}" \
-                     "$(command -v nvcc 2>/dev/null || true)" \
                      "${CONDA_PREFIX:-}/bin/nvcc" \
+                     "$(command -v nvcc 2>/dev/null || true)" \
                      "$(sed -n 's/^CMAKE_CUDA_COMPILER:[A-Z]*=//p' \
-                          "$HEAAN2_ROOT/build/CMakeCache.txt" 2>/dev/null | head -1)"; do
+                          "$HEAAN2_BUILD/CMakeCache.txt" 2>/dev/null | head -1)"; do
             if [[ -n "$_cand" && -x "$_cand" ]]; then
                 HEAAN2_NVCC="$_cand"
                 break
@@ -79,18 +101,19 @@ if [[ "$(basename "$TASK_DIR")" == "mnist" ]]; then
     if [[ ! -f "$HEAAN2_INSTALL/lib/cmake/HEaaN2/HEaaN2Config.cmake" ]]; then
         if [[ -f "$HEAAN2_ROOT/CMakeLists.txt" ]]; then
             echo "[build_task] Installing HEaaN2 from $HEAAN2_ROOT -> $HEAAN2_INSTALL"
+            echo "[build_task] HEaaN2 build tree: $HEAAN2_BUILD"
             [[ -n "${HEAAN2_CUDA_HOST_COMPILER:-}" ]] \
                 && echo "[build_task] CUDA host compiler: $HEAAN2_CUDA_HOST_COMPILER"
             # Note: setting CMAKE_INSTALL_RPATH here would NOT stick -- HEaaN2's
             # own install rules run file(RPATH_REMOVE) on libheaan2.so, so it ends
             # up with no RPATH regardless. The submission compensates by linking
             # its executables with DT_RPATH; see submissions/mnist/CMakeLists.txt.
-            cmake -S "$HEAAN2_ROOT" -B "$HEAAN2_ROOT/build" \
+            cmake -S "$HEAAN2_ROOT" -B "$HEAAN2_BUILD" \
                   -DCMAKE_BUILD_TYPE=Release \
                   -DBUILD_WITH_CUDA="$HEAAN2_BUILD_CUDA" \
                   ${HEAAN2_CUDA_HOST_COMPILER:+-DCMAKE_CUDA_HOST_COMPILER="$HEAAN2_CUDA_HOST_COMPILER"} \
                   -DCMAKE_INSTALL_PREFIX="$HEAAN2_INSTALL"
-            cmake --build "$HEAAN2_ROOT/build" --target install -j"$NPROC"
+            cmake --build "$HEAAN2_BUILD" --target install -j"$NPROC"
         else
             echo "[build_task] ERROR: no HEaaN2 install at $HEAAN2_INSTALL and" >&2
             echo "             no source tree at $HEAAN2_ROOT." >&2
