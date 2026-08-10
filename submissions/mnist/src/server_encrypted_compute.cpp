@@ -5,24 +5,29 @@
 //============================================================================
 //
 // Stage 7: the encrypted inference. Everything the model computes happens
-// here, on ciphertext:
+// here, on ciphertext. Dispatches on instance size (mlp::usePcmm):
 //
-//     fc1 matvec -> fold -> +b1 -> x^2 -> rescale -> fc2 matvec -> +b2
+//   HS (single/small):  fc1 matvec -> fold -> +b1 -> x^2 -> rescale ->
+//                        fc2 matvec -> +b2
+//   PCMM (medium/large): fc1 pcmm+b1 -> x^2 -> rescale -> fc2 pcmm -> +b2
 //
-// The server holds no secret key. It loads the evaluation keys the client
-// published and the cleartext model it owns.
+// The server holds no secret key in either scheme. It loads the evaluation
+// keys the client published and the cleartext model it owns.
 //
-// Setup (loading keys, constructing the two MatrixVectorEvals -- which is
-// where the weight diagonals get encoded) is timed separately from evaluation
-// and both are reported through io/<size>/server_reported_steps.json. Stage 3
-// could not do the setup: it never learns the instance size. See README.md.
+// Setup (loading keys, and -- scheme-dependently -- constructing the two
+// MatrixVectorEvals or encoding U1/U2/b2, both of which need the instance
+// size) is timed separately from evaluation, and both are reported through
+// io/<size>/server_reported_steps.json. Stage 3 could not do this setup: it
+// never learns the instance size. See README.md.
 
+#include "mlp_pcmm.hpp"
 #include "mlp_pipeline.hpp"
 
 #include <chrono>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <utility>
 
 using namespace heaan;
 using namespace mlp;
@@ -44,13 +49,8 @@ private:
 
 constexpr const char *CACHE_DIR = "submissions/mnist/build/model_cache";
 
-} // namespace
-
-int main(int argc, char *argv[]) try {
-    const auto size = parseInstanceSize(argc, argv);
-    const InstanceParams prms(size);
-    const Device dev = targetDevice();
-
+// Returns {setup_seconds, eval_seconds}.
+std::pair<double, double> runHS(const InstanceParams &prms, Device dev) {
     const Timer t_setup;
 
     const Levels levels = buildLevels();
@@ -81,7 +81,6 @@ int main(int argc, char *argv[]) try {
 
     const double setup_s = t_setup.seconds();
 
-    // ---- evaluate ----
     fs::create_directories(prms.ctxtdowndir());
     const size_t n_ct = numCtxts(prms.getBatchSize());
     double eval_s = 0.0;
@@ -104,11 +103,59 @@ int main(int argc, char *argv[]) try {
 
     std::cout << "         [server] " << n_ct << " ciphertext(s), setup "
               << setup_s << "s, eval " << eval_s << "s\n";
+    return {setup_s, eval_s};
+}
+
+std::pair<double, double> runPcmm(const InstanceParams &prms, Device dev) {
+    const Timer t_setup;
+
+    const Levels levels = pcmm::buildLevels();
+    const EnDecoder coeff_encoder = pcmm::makeCoeffEncoder(levels);
+    const auto num_images = static_cast<u32>(prms.getBatchSize());
+
+    auto relin_key = serial::loadAsPtr<ISwKey>(
+        (prms.pubkeydir() / RELIN_KEY_FILE).string(), dev);
+
+    const auto raw =
+        pcmm::readRawModel(std::string(CACHE_DIR) + "/pcmm.bin");
+    const auto model = pcmm::buildModel(raw.W1, raw.b1, raw.W2, raw.b2,
+                                        coeff_encoder, levels, num_images);
+
+    const double setup_s = t_setup.seconds();
+
+    fs::create_directories(prms.ctxtdowndir());
+    auto cx = pcmm::loadCtMatrix(
+        (prms.ctxtupdir() / pcmm::INPUT_CTMATRIX_FILE).string(), pcmm::IN_P,
+        pcmm::numCols(num_images), dev);
+
+    const Timer t_eval;
+    auto cy = ICtMatrix::make();
+    pcmm::inference(model, *relin_key, *cx, *cy, levels, num_images);
+    const double eval_s = t_eval.seconds();
+
+    pcmm::saveCtMatrix(
+        (prms.ctxtdowndir() / pcmm::RESULT_CTMATRIX_FILE).string(), *cy);
+
+    std::cout << "         [server] 1 ciphertext matrix (" << num_images
+              << " images), setup " << setup_s << "s, eval " << eval_s
+              << "s\n";
+    return {setup_s, eval_s};
+}
+
+} // namespace
+
+int main(int argc, char *argv[]) try {
+    const auto size = parseInstanceSize(argc, argv);
+    const InstanceParams prms(size);
+    const Device dev = targetDevice();
+
+    const auto [setup_s, eval_s] =
+        usePcmm(size) ? runPcmm(prms, dev) : runHS(prms, dev);
 
     std::ofstream json(prms.server_reported_steps_file());
     json << std::fixed << std::setprecision(6) << "{\n"
-         << "  \"Model setup (key load + diagonal encoding)\": " << setup_s
-         << ",\n"
+         << "  \"Model setup (key load + diagonal/weight encoding)\": "
+         << setup_s << ",\n"
          << "  \"Encrypted computation\": " << eval_s << ",\n"
          << "  \"Total\": " << (setup_s + eval_s) << "\n}\n";
     return 0;

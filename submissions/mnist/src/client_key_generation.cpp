@@ -6,13 +6,16 @@
 //
 // Stage 2.2: generate all key material at the client.
 //
-// The secret key is sampled at 2^SMALL_LOG_DEGREE and lifted to 2^LOG_DEGREE.
-// Lifting adds no entropy -- it buys fc1's key-less fold, and the switching
-// key budget is sized from the sampled degree. See mlp_params.hpp.
-//
-// Rotation keys are derived from the layer *shapes* only. The client has no
-// model and is not entitled to one, so nothing here may depend on the weights.
+// Dispatches on instance size (mlp::usePcmm): single/small use the
+// Halevi-Shoup layer scheme below; medium/large use PCMM (mlp_pcmm.hpp).
+// The two schemes need different key material -- HS wants rotation keys for
+// its two matvec layers plus a public encryption key; PCMM needs neither
+// rotation keys nor a public encryption key (its matrix encrypt is
+// necessarily symmetric-key, see runPcmm) but does need a relinearization
+// key at a different level. Each size only ever runs one scheme, so the two
+// keygen paths never collide inside the same io/<size>/ directory tree.
 
+#include "mlp_pcmm.hpp"
 #include "mlp_pipeline.hpp"
 
 #include <iostream>
@@ -20,11 +23,15 @@
 using namespace heaan;
 using namespace mlp;
 
-int main(int argc, char *argv[]) try {
-    const auto size = parseInstanceSize(argc, argv);
-    const InstanceParams prms(size);
-    const Device dev = targetDevice();
+namespace {
 
+// The secret key is sampled at 2^SMALL_LOG_DEGREE and lifted to 2^LOG_DEGREE.
+// Lifting adds no entropy -- it buys fc1's key-less fold, and the switching
+// key budget is sized from the sampled degree. See mlp_params.hpp.
+//
+// Rotation keys are derived from the layer *shapes* only. The client has no
+// model and is not entitled to one, so nothing here may depend on the weights.
+void runHS(const InstanceParams &prms) {
     const Levels levels = buildLevels();
     const u32 top = levels.top();
     const bool conj_inv = (NTT_ALG == NTTAlgorithm::CYC_FOR_CI);
@@ -85,9 +92,54 @@ int main(int argc, char *argv[]) try {
     serial::save((prms.pubkeydir() / ROT_KEY_FC1_FILE).string(), rot_keys_fc1);
     serial::save((prms.pubkeydir() / ROT_KEY_FC2_FILE).string(), rot_keys_fc2);
     serial::save((prms.pubkeydir() / RELIN_KEY_FILE).string(), *relin_key);
+}
+
+// PCMM's ISecretKey is sampled directly at pcmm::LOG_DEGREE (no lifting: pcmm
+// has no key-less fold to buy with one) and needs no rotation keys at all --
+// only a relinearization key for the x^2 step.
+//
+// HEaaN2's public EnDecryptor exposes matrix encrypt/decrypt only against a
+// secret key (there is no public-encryption-key overload for IPtMatrix /
+// ICtMatrix, unlike the plain-ciphertext overload the HS path uses above).
+// The client's own sk is therefore what client_encode_encrypt_input encrypts
+// with, and what this stage saves to seckeydir() -- still exclusively a
+// client-side operation, and sk never leaves seckeydir() (which the harness
+// does not measure), but it is a real, disclosed asymmetry against the HS
+// path's public-key encryption. See "Encryption: public key vs symmetric key"
+// in README.md.
+void runPcmm(const InstanceParams &prms) {
+    const Levels levels = pcmm::buildLevels();
+
+    SKGenerator skgen{SKGenParams{pcmm::LOG_DEGREE, pcmm::HW, pcmm::NTT_ALG}};
+    auto sk = skgen.genKey();
+
+    auto relin_key = pcmm::genRelinKey(*sk, levels, pcmm::SWK_MARGIN);
+
+    fs::create_directories(prms.pubkeydir());
+    fs::create_directories(prms.seckeydir());
+
+    serial::save((prms.seckeydir() / SECRET_KEY_FILE).string(), *sk);
+    serial::save((prms.pubkeydir() / RELIN_KEY_FILE).string(), *relin_key);
+}
+
+} // namespace
+
+int main(int argc, char *argv[]) try {
+    const auto size = parseInstanceSize(argc, argv);
+    const InstanceParams prms(size);
+    // Deliberately no targetDevice() here: key generation runs on the CPU. The
+    // client is a separate party and need not own a GPU, and the keys are
+    // serialized either way -- server_encrypted_compute is what loads them onto
+    // the device. Do not "fix" this by moving the key material to the GPU
+    // without also re-checking what the harness then attributes to stage 2.2.
+
+    if (usePcmm(size))
+        runPcmm(prms);
+    else
+        runHS(prms);
 
     std::cout << "         [client] keys written to " << prms.pubkeydir()
-              << " (device " << (dev == Device::CPU ? "CPU" : "GPU") << ")\n";
+              << "\n";
     return 0;
 } catch (const std::exception &e) {
     std::cerr << "client_key_generation: " << e.what() << "\n";

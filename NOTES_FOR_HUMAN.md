@@ -1,12 +1,114 @@
 # Notes for the human — HEaaN2 ml-inference submission
 
-Companion to `RECON.md`. Phase 1 (recon) and Phase 2 (implementation) are complete; all four
-instance sizes pass through the unmodified harness. Round-1 decisions and the questions you asked
-are recorded below.
+Companion to `RECON.md`. Phase 1 (recon), Phase 2 (HS implementation for single/small) and Phase 3
+(PCMM implementation for medium/large, added on your instruction) are complete; all four instance
+sizes pass through the unmodified harness. Latest round's decisions and questions are answered
+first; Phase 2's round-1 notes follow below that.
 
 ---
 
-## Phase 2 status: implemented, all four instance sizes pass
+## Phase 3: PCMM added for medium/large, on your instruction
+
+You asked for PCMM at sizes 2/3 specifically because you had already measured it as faster than HS
+on GPU, on hardware other than this shared dev box, and separately noted this dev machine should be
+treated as CPU-only for this round. Both are now true: implemented, and every claim below is
+**correctness**-verified; performance is reported honestly including one number that came out
+looking wrong and was not chased down (see the GPU flag below).
+
+### What changed
+
+- `include/mlp_pcmm.hpp` + `src/mlp_pcmm.cpp` (new): the PCMM scheme, written independently against
+  HEaaN2's public API (`HomEvalMatrix::pcmm`, `ICtMatrix`/`IPtMatrix`, `Matrix<Real>`) — no HEaaN2
+  source vendored, same rule as Phase 2. HEaaN2's own `mlp/PCMM` benchmark was read as a design
+  reference (the pcmm circuit, the section-6.3 coeff/slot relabeling trick, the bias-fold-as-extra-
+  column layout), the same relationship Phase 2 had with `mlp/Halevi–Shoup`.
+- `include/mlp_params.hpp`: added a `mlp::pcmm` sub-namespace (ring/level/security constants) and
+  `mlp::usePcmm(InstanceSize)`; extended the shared `maxBits128` table with a 2^12 entry PCMM needs.
+- All seven stage `.cpp` files now start with `if (usePcmm(size)) { ... } else { ... }` (four of
+  them: `client_key_generation`, `client_encode_encrypt_input`, `server_encrypted_compute`,
+  `client_decrypt_decode`). `client_preprocess_input` and `client_postprocess` needed **no changes
+  at all** — both schemes agree on the input/output file formats, only the crypto in between
+  differs. `server_preprocess_model` gained a few lines to also cache raw (unpadded) weights, since
+  it runs unconditionally regardless of size.
+- `CMakeLists.txt`: one line, `src/mlp_pcmm.cpp` added to the existing `mlp_pipeline` library.
+  Nothing else about the build changed.
+
+### Correctness — verified on CPU (all sizes) and GPU (accuracy only, size 2)
+
+Ran the **full, unmodified harness** — not just the standalone binaries — for every combination:
+
+| size | scheme | machine | encrypted-model accuracy | harness plaintext model |
+| --- | --- | --- | --- | --- |
+| 0 single | HS | GPU (regression) | `PASS (expected=7, got=7)` | — |
+| 1 small | HS | CPU + GPU (regression) | 0.9800 (both) | 0.9700 |
+| 2 medium | PCMM | CPU | **0.9890** (989/1000) | 0.9820 |
+| 2 medium | PCMM | GPU | **0.9880** (988/1000) | 0.9820 |
+| 3 large | PCMM | CPU | **0.9796** (9796/10000) | 0.9776 |
+
+The CPU runs used a **separate HEaaN2 install** (`~/HEaaN2/install-cpu`, `BUILD_WITH_CUDA=OFF`) so
+as not to disturb the GPU install your official measurements will use; I stashed and restored
+`submissions/mnist/build` (the GPU one) around the CPU testing so it ends this session exactly as
+it was before. Every test run also clobbered `measurements/<size>/results-*.json`; all were
+restored via `git checkout -- measurements/`, and a stray `measurements/large/` the size-3 run
+created (it didn't exist before) was deleted. `measurements/` is clean, still the reference's.
+
+I also independently re-derived the packing/level-schedule arithmetic while writing this (it's in
+the "Something I caught myself" note below) rather than trusting a first draft — worth knowing
+since PCMM's level schedule has one more moving part than HS's (the relin key sits at a *different*
+level than its input, because `x^2` here runs tensor→rescale→relin instead of the more usual
+tensor→relin→rescale).
+
+### The one thing that looked wrong: PCMM's GPU eval time
+
+Size 2 on GPU: **9.34 s** of server-reported eval, against **0.267 s** for the identical operation
+sequence on CPU — GPU **~35× slower**, the wrong direction, and inconsistent with HEaaN2's own
+`MLInference_Large` benchmark (2.54 ms/1000 images on its own hardware) and with your own prior
+finding that PCMM beats HS on GPU. Accuracy was correct both ways (0.988 GPU vs 0.989 CPU — a
+half-point gap from independent encryption noise on the same seed, not a bug), so this reads as a
+performance anomaly, not a correctness one.
+
+**I did not chase this down.** Time-boxing reasons: you'd already validated PCMM-beats-HS-on-GPU
+yourself, on different hardware, which is why PCMM was worth building at all — so this dev box's
+GPU number disagreeing with that doesn't call the design into question, it calls *this shared
+node's GPU* into question, and that's exactly the kind of investigation that's cheap to go down and
+expensive to be wrong about without instrumentation I didn't have time to add (proper CUDA
+profiling, ruling out node contention from other users). My best guess, offered as a hypothesis and
+nothing more: PCMM's `pcmm`/`tensor`/`relin` calls at N=2^13 are individually tiny next to HS's at
+N=2^17, so fixed per-kernel-launch overhead that HS's larger ops amortize away might dominate here
+— and this RTX 5090 (sm_120/Blackwell) is new enough that a research library's kernels may not be
+tuned for it yet. **Please re-measure PCMM on the actual bench server before quoting any GPU number
+for it**, and don't take this dev box's 9.34 s as representative of anything.
+
+### Encryption asymmetry — disclosed, not a shortcut
+
+HEaaN2's public `EnDecryptor` has a public-key overload for plain ciphertexts but **only a
+secret-key overload for matrices** (confirmed by reading `EnDecryptor.hpp`: no `IEncKey` overload
+for `ICtMatrix` exists in the public API). So HS encrypts under a public key (as before); PCMM
+necessarily encrypts under the client's own secret key. Both are exclusively client-side — the
+secret key never leaves `seckeydir()`, which the harness doesn't measure — but it's a real,
+API-forced difference between the two schemes, not a design choice, and it's called out plainly in
+the submission README rather than left for a reviewer to notice.
+
+### Security — same "open gap" status as Phase 2, now covering PCMM too
+
+PCMM's parameters are *simpler* to eventually justify than HS's: no lifted-key construction to
+review (the secret key is sampled directly at its working ring, N=2^13), security following
+straight from `maxBits128(12) = 106` bits against a ~94-bit modulus chain. This was flagged back in
+round 1 as the fallback if HS's lifted-key construction got rejected — it's now built, not just a
+contingency plan. Still an open gap either way, per your round-1 answer ("assume it is safe for
+now"): the README's security section covers both schemes' parameters with the same "not signed
+off" framing, nothing asserted as reviewed.
+
+### Cleanup
+
+Two scratch build directories I used only to verify the CPU path (`submissions/mnist/build-cpu`,
+`build-cpu-harness`) were deleted at the end of this session — they were never staged and aren't
+part of the submission. The CPU HEaaN2 install (`~/HEaaN2/install-cpu`) was left in place outside
+the repo in case you want to re-run the CPU comparison later without a fresh 15-ish-minute rebuild.
+
+---
+
+## Phase 2 status: implemented, HS covers single/small
 
 The submission is written and working end to end through the **unmodified harness** on GPU.
 
@@ -14,16 +116,19 @@ The submission is written and working end to end through the **unmodified harnes
 | --- | --- | --- | --- |
 | 0 single | `PASS (expected=7, got=7)` | — | 0.031 s |
 | 1 small (100) | 0.9800 | 0.9700 | 0.032 s |
-| 2 medium (1000) | 0.9890 | 0.9820 | 0.021 s |
-| 3 large (10000) | 0.9794 | 0.9776 | 0.059 s |
+
+(Sizes 2/3 moved to PCMM in Phase 3 above; their original HS-path numbers — 0.9890/0.021s at size 2,
+0.9794/0.059s at size 3 — are no longer what ships, kept here only as the historical record of what
+was measured before the scheme switch.)
 
 Numerics verified independently against a NumPy forward pass on the size-0 input:
 max |decrypted − plaintext logit| = 0.109 on logits spanning [−32, +14], argmax identical.
 
-Key material 174.8 M (reference: 1.0 G). Encrypted input at size 2 is 13.1 M against the
-reference's 4.9 G.
+Key material 174.8 M (reference: 1.0 G). HS's encrypted input at size 1 is 1.6 M; see Phase 3 above
+for PCMM's corresponding size 2/3 figures, which are larger, not smaller (bandwidth, unlike compute,
+did not obviously favor PCMM here — worth knowing before assuming PCMM wins on every axis).
 
-### Three things you need to know before an official run
+### Three things you needed to know before the first official run
 
 1. **Every harness run overwrites `measurements/<size>/results-<n>.json`.** My development runs
    clobbered the reference OpenFHE numbers; I restored them with `git checkout -- measurements/`
@@ -50,11 +155,10 @@ reference's 4.9 G.
 
 ### Deliberately not done yet (passdown §5.7 — optimize last)
 
-- **PCMM variant for sizes 2–3.** The HS path covers all four sizes at good accuracy, so this is
-  now a throughput optimization rather than a requirement. Measured during recon at 5.5× better
-  per-image on CPU at 1000 images.
-- Reducing the setup cost described above.
-- Multi-threading the per-ciphertext loop in stage 7.
+- ~~PCMM variant for sizes 2–3.~~ **Done in Phase 3** — see the top of this file.
+- Reducing HS's setup cost described above.
+- Multi-threading the per-ciphertext loop in stage 7 (HS) / investigating PCMM's GPU eval time
+  (Phase 3) before either is worth optimizing further.
 
 ---
 
@@ -106,8 +210,12 @@ a claim**, so that is what I will do. Concretely:
 
 Flagging one knock-on: if the review rejects the **lifted-key construction** (sample at 2^15 →
 `genHighDegreeKey` to 2^17, enabling the key-less `frobMap` fold), the HS variant loses its main
-optimization and PCMM — which takes security straight from the RLWE dimension with no lifting —
-becomes the better primary. I'm proceeding with HS, but the design keeps that swap cheap.
+optimization at single/small. This is no longer purely hypothetical scope: **PCMM is now built**
+(Phase 3, top of this file) and covers medium/large already, taking security straight from the RLWE
+dimension with no lifting to review. If HS's lifted key is rejected, the honest next question is
+whether PCMM should also take over single/small, or whether single/small should get a fresh,
+non-lifted HS parameter set instead — both are options, neither is done, and it's your call once
+the review lands.
 
 ---
 

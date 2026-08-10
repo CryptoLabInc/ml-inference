@@ -4,9 +4,16 @@
 // See the LICENSE.md file for details.
 //============================================================================
 //
-// Stage 8: decrypt the result ciphertexts and read the logits back out of the
-// slots. Logit r of image i within a ciphertext lives at slot r*128 + i.
+// Stage 8: decrypt the result and read the logits back out.
+//
+// HS: logit r of image i within a ciphertext lives at slot r*128 + i.
+// PCMM: logit r of image i lives at column (i / ringDim()) * degree +
+// (i % ringDim()) of matrix row r -- see mlp_pcmm.hpp's unpackLogits.
+//
+// Either scheme writes the same output format: one line per image, LABEL_DIM
+// space-separated logits, so client_postprocess needs no dispatch of its own.
 
+#include "mlp_pcmm.hpp"
 #include "mlp_pipeline.hpp"
 
 #include <iostream>
@@ -14,11 +21,10 @@
 using namespace heaan;
 using namespace mlp;
 
-int main(int argc, char *argv[]) try {
-    const auto size = parseInstanceSize(argc, argv);
-    const InstanceParams prms(size);
-    const Device dev = targetDevice();
+namespace {
 
+std::vector<std::vector<double>> runHS(const InstanceParams &prms,
+                                       Device dev) {
     const Levels levels = buildLevels();
     const EnDecoder encoder = makeEncoder(levels);
     const EnDecryptor encryptor{EncryptParams{DiscreteGaussian(NOISE_STDDEV)}};
@@ -52,6 +58,45 @@ int main(int argc, char *argv[]) try {
             scores.push_back(std::move(logits));
         }
     }
+    return scores;
+}
+
+std::vector<std::vector<double>> runPcmm(const InstanceParams &prms,
+                                         Device dev) {
+    const Levels levels = pcmm::buildLevels();
+    // decode reads the dft flag from the plaintext's own metadata (just
+    // flipped back to slot by setDFT below), so the encoder object's own
+    // params only need to match everything else -- the same coefficient
+    // encoder weights and bias were built with.
+    const EnDecoder coeff_encoder = pcmm::makeCoeffEncoder(levels);
+    const EnDecryptor encryptor{EncryptParams{DiscreteGaussian(NOISE_STDDEV)}};
+
+    auto sk = serial::loadAsPtr<ISecretKey>(
+        (prms.seckeydir() / SECRET_KEY_FILE).string(), dev);
+
+    const auto num_images = static_cast<u32>(prms.getBatchSize());
+    auto cy = pcmm::loadCtMatrix(
+        (prms.ctxtdowndir() / pcmm::RESULT_CTMATRIX_FILE).string(),
+        LABEL_DIM, pcmm::numCols(num_images), dev);
+
+    pcmm::setDFT(*cy, /*dft=*/true, num_images);
+    auto dy = IPtMatrix::make();
+    encryptor.decrypt(*cy, *sk, *dy);
+    Matrix<Real> yc;
+    coeff_encoder.decode(*dy, yc);
+    yc.to(Device::CPU);
+
+    return pcmm::unpackLogits(yc, num_images);
+}
+
+} // namespace
+
+int main(int argc, char *argv[]) try {
+    const auto size = parseInstanceSize(argc, argv);
+    const InstanceParams prms(size);
+    const Device dev = targetDevice();
+
+    const auto scores = usePcmm(size) ? runPcmm(prms, dev) : runHS(prms, dev);
 
     fs::create_directories(prms.iointermdir());
     writeSamples(scores, prms.model_scores_file().string());
