@@ -30,7 +30,7 @@ find_package(HEaaN2 REQUIRED)
 find_package(OpenMP REQUIRED)
 
 # --- shared pipeline -------------------------------------------------------
-add_library(mlp_pipeline STATIC src/mlp_pipeline.cpp)
+add_library(mlp_pipeline STATIC src/mlp_pipeline.cpp src/mlp_pcmm.cpp)
 target_include_directories(mlp_pipeline PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(mlp_pipeline PUBLIC HEaaN2::HEaaN2 OpenMP::OpenMP_CXX)
 set_target_properties(mlp_pipeline PROPERTIES POSITION_INDEPENDENT_CODE ON)

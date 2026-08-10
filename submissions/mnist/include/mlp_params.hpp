@@ -24,6 +24,7 @@
 #define MLP_PARAMS_HPP_
 
 #include "HEaaN2/HEaaN2.hpp"
+#include "params.h"
 
 #include <cstdint>
 #include <stdexcept>
@@ -46,6 +47,15 @@ constexpr u32 MNIST_DIM = IMG_DIM * IMG_DIM;       // 784, what the harness hand
 constexpr u32 INPUT_DIM = CROP_DIM * CROP_DIM;     // 484, what fc1 consumes
 constexpr u32 HIDDEN_DIM = 128;
 constexpr u32 LABEL_DIM = 10;
+
+// Which homomorphic scheme a stage uses is a function of instance size alone:
+// single/small (1, 100 images) use the Halevi-Shoup layer scheme below;
+// medium/large (1000, 10000) use the PCMM (GEMM-based) scheme in
+// mlp_pcmm.hpp -- pcmm's per-image cost keeps falling as the batch grows,
+// while HS's fixed 128-images-per-ciphertext packing does not. Every stage
+// binary dispatches on this at its own entry point; see mlp_pcmm.hpp for the
+// PCMM-side parameters.
+inline bool usePcmm(InstanceSize size) { return size >= InstanceSize::MEDIUM; }
 
 // Normalization the model was trained under (torchvision ToTensor + Normalize).
 // The harness writes pixels already scaled to [0,1], so only the affine part
@@ -113,12 +123,15 @@ constexpr u32 HW = 0;                // 0 = uniform ternary
 constexpr double SWK_MARGIN = 5.0;
 constexpr double NOISE_STDDEV = 3.2;
 
-// Provisional 128-bit modulus budget for a uniform-ternary secret (hw == 0).
-// 2^13..2^15 from HEaven's maxBitsPolicy128(); 2^16 and 2^17 from
-// ePrint 2024/463. The entries are hw-specific -- do not substitute a value
-// from an hw > 0 table.
+// Provisional 128-bit modulus budget for a uniform-ternary secret (hw == 0),
+// keyed by RLWE dimension. 2^12..2^15 from HEaven's maxBitsPolicy128(); 2^16
+// and 2^17 from ePrint 2024/463. The entries are hw-specific -- do not
+// substitute a value from an hw > 0 table. Shared by both the HS layer scheme
+// (which uses 13..17) and the PCMM scheme in mlp_pcmm.hpp (which needs 12,
+// its minimum viable ring): one table, so a review only edits it once.
 inline u32 maxBits128(u32 log_degree) {
     switch (log_degree) {
+    case 12: return 106;
     case 13: return 214;
     case 14: return 430;
     case 15: return 868;
@@ -242,6 +255,96 @@ constexpr const char *SECRET_KEY_FILE = "sk.bin";
 inline size_t numCtxts(size_t n) {
     return (n + IMAGES_PER_CTXT - 1) / IMAGES_PER_CTXT;
 }
+
+//===========================================================================
+// PCMM (GEMM-based) scheme parameters, for medium/large.
+//
+// feature = ciphertext row (pcmm's contraction dim), image = slot -- the
+// opposite packing from the HS scheme above. One message holds
+// ringDim() images; batches larger than that split into further "blocks"
+// within a single ICtMatrix, handled by mlp_pcmm.hpp. See its header comment
+// for the algorithm (pcmm GEMM, the section-6.3 coeff/slot relabeling trick,
+// the bias fold into an extra weight column).
+//===========================================================================
+
+namespace pcmm {
+
+// Conjugate-invariant, same as the HS scheme, and for the same reason: the
+// model and the input are real-valued. GRAFTED matches the HS scheme's ring
+// type so both schemes' ciphertexts/keys use the same word representation
+// (not that any object is ever shared between them -- each instance size
+// picks one scheme and stays in it -- but it keeps the two schemes'
+// parameter blocks easy to compare).
+constexpr heaan::NTTAlgorithm NTT_ALG = heaan::NTTAlgorithm::CYC_FOR_CI;
+constexpr heaan::PolyType POLY_TYPE = heaan::PolyType::GRAFTED;
+
+// Smallest ring with both (a) a valid 128-bit table entry (maxBits128 has no
+// entry below RLWE dimension 2^12) and (b) enough coefficients per message to
+// be worth the fixed cost of a pcmm call. Fixed across medium and large: pcmm
+// work is proportional to total stored coefficients (blocks * ringDim), and
+// for this batch range that total is lower at 2^13 with more, smaller blocks
+// than at a larger ring with fewer, larger ones -- see ringDim()/numBlocks().
+constexpr u32 LOG_DEGREE = 13;
+constexpr u32 LOG_RLWE_DIM = LOG_DEGREE - 1; // CI halves it: 12
+
+// IN_DIM padded to a rows x cols GEMM contraction; +1 row folds b1 in as an
+// extra weight column against an appended "ones" row (see mlp_pcmm.hpp).
+constexpr u32 IN_P = INPUT_DIM + 1; // 485
+
+//---------------------------------------------------------------------------
+// SECURITY-RELEVANT PARAMETERS -- ANALYSIS PENDING, same status as the HS
+// scheme's block above and the same open item in NOTES_FOR_HUMAN.md. Unlike
+// HS, PCMM's secret key is sampled directly at its working degree (no
+// lifting), so its security rests on maxBits128(LOG_RLWE_DIM) alone with no
+// separate lifting argument to review.
+//---------------------------------------------------------------------------
+
+constexpr u32 HW = 0; // uniform ternary, same as the HS scheme
+constexpr double SWK_MARGIN = 5.0;
+
+// Bottom modulus BASE_BITS - RESCALE_BITS has to clear the iDFT coefficient
+// range of the fc2 output (not the logit range itself -- its inverse DFT,
+// whose max coefficient magnitude is materially larger), or one wrapped
+// coefficient smears error across the whole message. The upper bound is the
+// relin key: x^2 runs tensor -> rescale -> relin, so the key's modulus is one
+// prime of BASE_BITS + RESCALE_BITS bits, and the gadget builder refuses
+// unless that fits within maxBits128(LOG_RLWE_DIM) with margin. 28/22 clears
+// both ends (50-bit key modulus, 6 bits of chain headroom) against the
+// 106-bit budget at LOG_RLWE_DIM=12.
+constexpr u32 BASE_BITS = 28;
+constexpr u32 RESCALE_BITS = 22;
+constexpr u32 NUM_MULTS = 3; // fc1, x^2, fc2 -- one rescale each
+
+// Level schedule, one rescale per operation, offsets below the top level:
+//   L(top)   encrypt X, encode U1 -> fc1 pcmm+rescale     -> L(top-1)
+//   L(top-1) x^2: tensor (still L(top-1)) -> rescale        -> L(top-2), relin
+//   L(top-2) encode U2 -> fc2 pcmm+rescale                 -> L(top-3)
+//   L(top-3) +b2 (plaintext add, no level cost), decrypt
+// The relin key's modulus is levels.mods[top-SQUARE_OUT_DROP]: rescale runs
+// BEFORE relin here (tensor -> rescale -> relin, not the more usual
+// tensor -> relin -> rescale), so the key is built at x^2's post-rescale
+// level, not its input level.
+constexpr u32 FC1_IN_DROP = 0, FC1_OUT_DROP = 1;
+constexpr u32 SQUARE_OUT_DROP = 2; // relin key lives at this level
+constexpr u32 FC2_IN_DROP = 2, FC2_OUT_DROP = 3;
+constexpr u32 B2_DROP = 3; // b2 is added at fc2's output level, no change
+
+// Coefficients one message actually stores: the whole block in the NORMAL
+// ring, half of it (CI's free half) in the conjugate-invariant one.
+inline u32 ringDim() { return 1U << LOG_RLWE_DIM; } // == 1 << (LOG_DEGREE - 1)
+
+// A message holds ringDim() images; a batch bigger than that splits into
+// further blocks within one ICtMatrix.
+inline u32 numBlocks(u32 num_images) {
+    return (num_images + ringDim() - 1) / ringDim();
+}
+
+// Server-side ICtMatrix/IPtMatrix column count: stored coefficients, i.e.
+// blocks * ringDim() -- NOT the client-side Matrix<Real> width, which is
+// blocks * (1 << LOG_DEGREE). See the packing note in mlp_pcmm.hpp.
+inline u32 numCols(u32 num_images) { return numBlocks(num_images) * ringDim(); }
+
+} // namespace pcmm
 
 } // namespace mlp
 

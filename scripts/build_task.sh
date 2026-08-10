@@ -60,24 +60,24 @@ if [[ "$(basename "$TASK_DIR")" == "mnist" ]]; then
         HEAAN2_CUDA_HOST_COMPILER="$(dirname "$HEAAN2_NVCC")/g++"
     fi
 
-    # HEaaN2 pulls private CryptoLabInc deps (HEaven, hem) that CPM asks for
-    # over https, which cannot prompt for a password in a non-interactive build.
-    # If an SSH key can reach GitHub, rewrite those URLs for the duration of
-    # this build only -- via GIT_CONFIG_*, so the user's git config is untouched.
-    # Set HEAAN2_GIT_SSH=0 to skip (e.g. if you use a credential helper instead).
-    # ("|| true" because a successful "ssh -T git@github.com" still exits 1, which
-    # pipefail would otherwise read as no SSH access.)
-    if [[ "${HEAAN2_GIT_SSH:-1}" == "1" ]] \
-       && { ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=10 \
-                -T git@github.com 2>&1 || true; } | grep -q 'successfully authenticated'; then
-        echo "[build_task] Routing github.com fetches over SSH for this build."
-        export GIT_CONFIG_COUNT=1
-        export GIT_CONFIG_KEY_0='url.git@github.com:.insteadOf'
-        export GIT_CONFIG_VALUE_0='https://github.com/'
-    fi
-
     if [[ ! -f "$HEAAN2_INSTALL/lib/cmake/HEaaN2/HEaaN2Config.cmake" ]]; then
         if [[ -f "$HEAAN2_ROOT/CMakeLists.txt" ]]; then
+            # HEaaN2 pulls private CryptoLabInc deps (HEaven, hem) that CPM asks for
+            # over https, which cannot prompt for a password in a non-interactive build.
+            # If an SSH key can reach GitHub, rewrite those URLs for the duration of
+            # this build only -- via GIT_CONFIG_*, so the user's git config is untouched.
+            # Set HEAAN2_GIT_SSH=0 to skip (e.g. if you use a credential helper instead).
+            # ("|| true" because a successful "ssh -T git@github.com" still exits 1, which
+            # pipefail would otherwise read as no SSH access.)
+            if [[ "${HEAAN2_GIT_SSH:-1}" == "1" ]] \
+               && { ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=10 \
+                        -T git@github.com 2>&1 || true; } | grep -q 'successfully authenticated'; then
+                echo "[build_task] Routing github.com fetches over SSH for this build."
+                export GIT_CONFIG_COUNT=1
+                export GIT_CONFIG_KEY_0='url.git@github.com:.insteadOf'
+                export GIT_CONFIG_VALUE_0='https://github.com/'
+            fi
+
             echo "[build_task] Installing HEaaN2 from $HEAAN2_ROOT -> $HEAAN2_INSTALL"
             [[ -n "${HEAAN2_CUDA_HOST_COMPILER:-}" ]] \
                 && echo "[build_task] CUDA host compiler: $HEAAN2_CUDA_HOST_COMPILER"
@@ -106,7 +106,7 @@ if [[ "$(basename "$TASK_DIR")" == "mnist" ]]; then
     echo "[build_task] Configuring the HEaaN2 MNIST submission..."
     # HEaaN2Config.cmake does find_dependency(CUDAToolkit), which only searches
     # PATH for nvcc -- point it at the toolkit we already located instead.
-    cmake -S "$TASK_DIR" -B "$BUILD" \
+    env -u HEAAN2_ROOT cmake -S "$TASK_DIR" -B "$BUILD" \
           -DCMAKE_BUILD_TYPE=Release \
           -DBUILD_WITH_CUDA="$HEAAN2_BUILD_CUDA" \
           ${HEAAN2_NVCC:+-DCUDAToolkit_ROOT="$(dirname "$(dirname "$HEAAN2_NVCC")")"} \

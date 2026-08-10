@@ -415,19 +415,31 @@ stating before anyone quotes these:
 
 ## Status
 
-Phase 1 (recon) and Phase 2 (implementation) complete. The submission lives in
-`submissions/mnist/`, is built against the HEaaN2 public API only, and passes all four instance
-sizes through the unmodified harness on GPU:
+Phase 1 (recon), Phase 2 (HS implementation, single/small) and Phase 3 (PCMM implementation,
+medium/large — added on request once GPU testing showed PCMM ahead of HS at those sizes) are all
+complete. The submission lives in `submissions/mnist/`, is built against the HEaaN2 public API
+only, and passes all four instance sizes through the unmodified harness:
 
-| size | encrypted-model accuracy | harness plaintext model |
-| --- | --- | --- |
-| 0 single | `PASS (expected=7, got=7)` | — |
-| 1 small | 0.9800 | 0.9700 |
-| 2 medium | 0.9890 | 0.9820 |
-| 3 large | 0.9794 | 0.9776 |
+| size | scheme | encrypted-model accuracy | harness plaintext model |
+| --- | --- | --- | --- |
+| 0 single | HS | `PASS (expected=7, got=7)` | — |
+| 1 small | HS | 0.9800 | 0.9700 |
+| 2 medium | PCMM | 0.9890 (CPU) / 0.9880 (GPU) | 0.9820 |
+| 3 large | PCMM | 0.9796 (CPU) | 0.9776 |
 
-Outstanding, both tracked in `NOTES_FOR_HUMAN.md`:
+Every combination above passed through the **full, unmodified harness**, not just standalone
+binaries. HS was verified on GPU; PCMM was verified on both CPU (a separate, isolated HEaaN2
+install, so as not to disturb the GPU install the official measurements will use) and GPU
+(accuracy only — see below).
 
-- the ≥128-bit security justification, recorded as an open gap per §1.4 and awaiting crypto-side
-  review;
+Outstanding, all tracked in `NOTES_FOR_HUMAN.md`:
+
+- the ≥128-bit security justification for **both schemes**, recorded as an open gap per §1.4 and
+  awaiting crypto-side review — PCMM's is the simpler of the two to eventually close, since it has
+  no lifted-key construction to review;
+- **PCMM's GPU evaluation time on this shared dev box measured ~35× slower than the same batch on
+  CPU** (9.34 s vs 0.267 s at size 2), the wrong direction and inconsistent with both HEaaN2's own
+  published PCMM numbers and the human's own separate GPU measurement that motivated building PCMM
+  at all. Not root-caused — flagged as needing re-measurement on the actual bench server before any
+  PCMM performance number is quoted;
 - no official measurements generated — `measurements/` still holds the reference OpenFHE numbers.
