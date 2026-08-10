@@ -32,6 +32,27 @@ if [[ "$(basename "$TASK_DIR")" == "mnist" ]]; then
     HEAAN2_INSTALL="${HEAAN2_DIR:-$HEAAN2_ROOT/install}"
     HEAAN2_BUILD_CUDA="${HEAAN2_BUILD_CUDA:-ON}"
 
+    # Which GPU architectures to emit cubins for. This MUST be passed: CMake
+    # always seeds CMAKE_CUDA_ARCHITECTURES in the cache with the compiler's
+    # default (52) as soon as CUDA is enabled, and HEaven's own fallback
+    #   if(DEFINED CACHE{CMAKE_CUDA_ARCHITECTURES}) ... else() "75-real;..."
+    # therefore never reaches its else branch. Left alone, the whole stack is
+    # built for sm_52 only, and every real GPU then has to JIT the embedded
+    # compute_52 PTX at load time -- which fails outright when the driver is
+    # older than the toolkit ("cudaErrorUnsupportedPtxVersion: the provided PTX
+    # was compiled with an unsupported toolchain", e.g. CUDA 12.8 nvcc against a
+    # 12.4-era 550.x driver). A -real cubin for the target needs no JIT and runs
+    # on any driver of the same CUDA major version, so naming the architectures
+    # fixes the failure and removes the JIT cost besides.
+    #
+    # The default matches HEaaN2's own CMakePresets.json. Narrow it to the one
+    # architecture you run on for a much faster build (RTX 4090 -> "89-real",
+    # RTX 5090 -> "120-real"), or use "native" to detect the build host's GPU --
+    # but note "native" needs a visible device at configure time, so it is wrong
+    # on a GPU-less submit node. "120-real" requires CUDA >= 12.8.
+    HEAAN2_CUDA_ARCH="${HEAAN2_CUDA_ARCH:-75-real;80-real;89-real;120-real}"
+    [[ "$HEAAN2_BUILD_CUDA" == "ON" ]] || HEAAN2_CUDA_ARCH=""
+
     # Build HEaaN2 in a directory of this script's own, NOT $HEAAN2_ROOT/build.
     # That path is what HEaaN2's own CMakePresets.json uses as binaryDir, with
     # -G Ninja -- so any checkout that has ever been configured by hand already
@@ -102,6 +123,8 @@ if [[ "$(basename "$TASK_DIR")" == "mnist" ]]; then
 
             echo "[build_task] Installing HEaaN2 from $HEAAN2_ROOT -> $HEAAN2_INSTALL"
             echo "[build_task] HEaaN2 build tree: $HEAAN2_BUILD"
+            [[ -n "$HEAAN2_CUDA_ARCH" ]] \
+                && echo "[build_task] CUDA architectures: $HEAAN2_CUDA_ARCH"
             [[ -n "${HEAAN2_CUDA_HOST_COMPILER:-}" ]] \
                 && echo "[build_task] CUDA host compiler: $HEAAN2_CUDA_HOST_COMPILER"
             # Note: setting CMAKE_INSTALL_RPATH here would NOT stick -- HEaaN2's
@@ -111,6 +134,7 @@ if [[ "$(basename "$TASK_DIR")" == "mnist" ]]; then
             cmake -S "$HEAAN2_ROOT" -B "$HEAAN2_BUILD" \
                   -DCMAKE_BUILD_TYPE=Release \
                   -DBUILD_WITH_CUDA="$HEAAN2_BUILD_CUDA" \
+                  ${HEAAN2_CUDA_ARCH:+-DCMAKE_CUDA_ARCHITECTURES="$HEAAN2_CUDA_ARCH"} \
                   ${HEAAN2_CUDA_HOST_COMPILER:+-DCMAKE_CUDA_HOST_COMPILER="$HEAAN2_CUDA_HOST_COMPILER"} \
                   -DCMAKE_INSTALL_PREFIX="$HEAAN2_INSTALL"
             cmake --build "$HEAAN2_BUILD" --target install -j"$NPROC"
@@ -119,7 +143,7 @@ if [[ "$(basename "$TASK_DIR")" == "mnist" ]]; then
             echo "             no source tree at $HEAAN2_ROOT." >&2
             echo "             Set HEAAN2_ROOT to a HEaaN2 checkout, or HEAAN2_DIR" >&2
             echo "             to an existing install prefix. See" >&2
-            echo "             submissions/mnist/README.md." >&2
+            echo "             submissions/mnist/BUILDING.md." >&2
             exit 1
         fi
     else
