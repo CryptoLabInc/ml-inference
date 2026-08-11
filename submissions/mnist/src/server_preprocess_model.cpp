@@ -7,29 +7,37 @@
 // Stage 3: server-side model preprocessing.
 //
 // The harness invokes this stage with NO arguments (run_submission.py:97), so
-// it cannot know the instance size and therefore cannot reach the instance's
-// io/<size>/public_keys directory. Everything key-dependent -- in particular
-// MatrixVectorEval, which encodes its diagonals in its constructor on the
-// device of the rotation keys -- must therefore happen in stage 7.
+// it cannot know the instance size and cannot reach io/<size>/public_keys --
+// nothing here may depend on the instance size or on any key material.
 //
-// What is left here is the genuinely size- and key-independent half: read the
-// CSV weights once and validate their shapes, then write them out in BOTH
-// forms the two schemes want: the HS scheme's padded p x q diagonal layout,
-// and PCMM's raw (unpadded) CSV shapes. Both schemes read the same source
-// weights -- this just avoids parsing the CSVs twice across two stage
-// binaries. See "Stage split" in DESIGN.md for how the two halves' timing
-// is reported.
+// For the HS scheme that is no longer a limitation. Encoding the layer
+// diagonals is the expensive part of building the model (~8.4 s for the two
+// layers), and it depends only on the weights, the layer geometry and the
+// level/scale -- all compile-time constants -- plus the gadget decomposition
+// of the rotation keys, which is a *shape* carrying no key material
+// (mlp::makeSwkParams). So it happens here, in the stage the harness provides
+// for model preprocessing, and stage 7 only binds the keys to the result.
+// Encoding runs on the GPU because that is where the evaluation runs: the
+// library does not guarantee that encoding on the CPU and moving afterwards
+// gives bit-identical plaintexts.
+//
+// PCMM's model encoding genuinely cannot move here -- it encodes at
+// batch-size-dependent shapes -- but at 0.12 s it does not matter. Its raw
+// weights are cached here so the CSVs are parsed once.
+//
+// See "Stage split" in DESIGN.md for how the timing is reported.
 
 #include "mlp_pcmm.hpp"
 #include "mlp_pipeline.hpp"
 
 #include <iostream>
 
+using namespace heaan;
 using namespace mlp;
 
 namespace {
 constexpr const char *WEIGHT_DIR = "submissions/mnist/weights";
-constexpr const char *CACHE_DIR = "submissions/mnist/build/model_cache";
+constexpr const char *CACHE_DIR = MODEL_CACHE_DIR;
 } // namespace
 
 int main() try {
@@ -47,7 +55,8 @@ int main() try {
 
     fs::create_directories(CACHE_DIR);
 
-    // HS: padded p x q diagonal layout.
+    // HS: padded p x q diagonal layout. Only the bias is read back in stage 7
+    // now, but the padded weights are what the diagonals are built from here.
     const auto fc1 = padWeights(FC1, W1, b1);
     const auto fc2 = padWeights(FC2, W2, b2);
     writeLayerWeights(fc1, std::string(CACHE_DIR) + "/fc1.bin");
@@ -56,7 +65,29 @@ int main() try {
     // PCMM: raw CSV shapes, unpadded.
     pcmm::writeRawModel({W1, b1, W2, b2}, std::string(CACHE_DIR) + "/pcmm.bin");
 
-    std::cout << "         [server] model cached to " << CACHE_DIR << "\n";
+    // HS: the expensive part -- encode both layers' diagonals, no keys needed.
+    // Skipped on a PCMM instance, which never looks at them: this is several
+    // seconds of work, and the marker is the only way this stage can know. An
+    // absent marker means prepare everything.
+    const auto marked = readInstanceMarker();
+    if (marked && usePcmm(*marked)) {
+        std::cout << "         [server] model cached to " << CACHE_DIR
+                  << " (PCMM instance: HS diagonals not needed)\n";
+        return 0;
+    }
+
+    const Levels levels = buildLevels();
+    const u32 top = levels.top();
+    const Device dev = targetDevice();
+
+    const auto enc1 = encodeDiags(FC1, fc1.W, levels, top - FC1_IN_DROP, dev);
+    serial::save(std::string(CACHE_DIR) + "/fc1_diags.bin", enc1);
+    const auto enc2 = encodeDiags(FC2, fc2.W, levels, top - FC2_IN_DROP, dev);
+    serial::save(std::string(CACHE_DIR) + "/fc2_diags.bin", enc2);
+
+    std::cout << "         [server] model cached to " << CACHE_DIR << " ("
+              << enc1.numDiags() << " + " << enc2.numDiags()
+              << " diagonals encoded)\n";
     return 0;
 } catch (const std::exception &e) {
     std::cerr << "server_preprocess_model: " << e.what() << "\n";

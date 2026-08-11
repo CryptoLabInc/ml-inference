@@ -16,6 +16,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -35,6 +36,14 @@ heaan::MatrixVectorEvalParams makeMvParams(const LayerGeom &geom,
                                            const heaan::Levels &levels,
                                            u32 in_level,
                                            heaan::Real128 in_scale);
+
+// The switching-key parameters for one level. Carries no key material -- it is
+// the *shape* of a switching key, including the gadget decomposition that
+// diagonal encoding needs. client_key_generation builds its rotation keys from
+// this, and server_preprocess_model encodes diagonals against the same object,
+// so the two cannot drift: a gadget decomposition mismatch makes the encoded
+// diagonals unusable with the keys.
+heaan::SwKeyGenParams makeSwkParams(const heaan::Levels &levels, u32 level);
 
 //===========================================================================
 // Model
@@ -106,9 +115,23 @@ struct Layer {
     heaan::Real128 scale_to;
 };
 
-// Assemble a layer on the server from loaded keys plus cleartext weights.
-// `rot_keys` is consumed.
-Layer makeLayer(const LayerGeom &geom, const LayerWeights &lw,
+// Encode a layer's diagonals, WITHOUT any key material. This is the expensive
+// half of building a layer (~4 s per layer at FC1's size), and it depends only
+// on the weights, the layer geometry and the level -- all fixed -- so
+// server_preprocess_model runs it and serializes the result. Encoding happens
+// on `dev` directly: the library does not guarantee that encoding on the CPU
+// and moving to a GPU afterwards gives bit-identical plaintexts.
+heaan::MatrixVectorEvalEncoded encodeDiags(const LayerGeom &geom,
+                                           const std::vector<double> &W,
+                                           const heaan::Levels &levels,
+                                           u32 in_level, heaan::Device dev);
+
+// Assemble a layer on the server from loaded keys plus the pre-encoded
+// diagonals. `rot_keys` is consumed; `encoded` is shared, not copied, so it may
+// be destroyed afterwards. Only the bias is encoded here -- one message per
+// layer, which is negligible next to the diagonals.
+Layer makeLayer(const LayerGeom &geom, const std::vector<double> &bias,
+                const heaan::MatrixVectorEvalEncoded &encoded,
                 const heaan::Levels &levels, u32 in_level, u32 out_level,
                 const heaan::EnDecoder &encoder,
                 std::unique_ptr<heaan::RotKeyPtrs> rot_keys,
@@ -117,6 +140,31 @@ Layer makeLayer(const LayerGeom &geom, const LayerWeights &lw,
 // Online evaluation: ciphertext operations only. `ct` is replaced.
 void homLayer(heaan::Ptr<heaan::ICiphertext> &ct, const Layer &lyr,
               const heaan::HomEval &eval, const heaan::HomEvalFlexible &flex);
+
+//===========================================================================
+// Server-side model cache, and the instance marker.
+//
+// server_preprocess_model (stage 3) is invoked with NO arguments, so it cannot
+// tell which scheme the run will use -- and encoding the HS diagonals costs
+// ~8.4 s, which is pure waste on a PCMM instance. It cannot infer the size from
+// io/ either: the harness only clears the *current* instance's directory, so
+// stale ones from earlier runs sit alongside it.
+//
+// So the stage that does know writes it down. client_key_generation (stage 2.2)
+// receives <size> and always runs before stage 3, so it drops the instance size
+// here on its way past. This is our own pipeline passing a public,
+// already-known quantity between our own stages through our own build
+// directory -- not an inference about harness internals, and nothing about the
+// measurement changes: both schemes still do all of their own work.
+//
+// A missing or unreadable marker is not an error: stage 3 falls back to
+// preparing both schemes, which is what it did before this existed.
+//===========================================================================
+
+constexpr const char *MODEL_CACHE_DIR = "submissions/mnist/build/model_cache";
+
+void writeInstanceMarker(InstanceSize size);
+std::optional<InstanceSize> readInstanceMarker();
 
 //===========================================================================
 // Harness file formats
