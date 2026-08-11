@@ -196,27 +196,36 @@ model ([§4](#4-results)).
 
 ## 4. Results
 
-Seed 3, through the **unmodified harness**, on 1× RTX 5090 (sm_120). **Not official measurements**:
-`measurements/` still holds the reference OpenFHE numbers. All figures come from a HEaaN2 verified
-as natively sm_120 by the [architecture check](BUILDING.md#-this-submission-requires-an-sm_120-gpu)
-— a library that falls back to JIT-compiling PTX reports several seconds of first-run cost as if it
-were evaluation time, so that check is a precondition for quoting any timing here.
+Seed 3, through the **unmodified harness**, on 1× RTX 5090 (sm_120). These are the official
+measurements: every figure below is the mean of the three runs committed under
+[`measurements/`](../../measurements/), taken with the stage-7 warm-up and timer synchronization in
+place. All come from a HEaaN2 verified as natively sm_120 by the
+[architecture check](BUILDING.md#-this-submission-requires-an-sm_120-gpu) — a library that falls
+back to JIT-compiling PTX reports several seconds of first-run cost as if it were evaluation time,
+so that check is a precondition for quoting any timing here.
 
 ### As shipped
 
 | | size 0 (1) HS | size 1 (100) HS | size 2 (1000) PCMM | size 3 (10000) PCMM |
 | --- | --- | --- | --- | --- |
-| harness `Encrypted computation` | 4.63 s | 4.65 s | **0.44 s** | **0.57 s** |
-| ├─ model setup | 4.44 s | 4.46 s | 0.19–0.22 s | 0.20 s |
-| └─ evaluation | 0.016 s | 0.016 s | 0.040–0.046 s | 0.042 s |
+| harness `Encrypted computation` | 7.04 s | 6.94 s | **0.43 s** | **0.50 s** |
+| ├─ model setup | 6.75 s | 6.65 s | 0.048 s | 0.045 s |
+| ├─ warm-up (discarded) | 0.0055 s | 0.0055 s | 0.030 s | 0.028 s |
+| └─ evaluation | **1.01 ms** | **1.00 ms** | **0.91 ms** | **2.63 ms** |
 | Public + evaluation keys | 174.8 M | 174.8 M | **54.0 K** | **54.0 K** |
 | Encrypted input | 1.6 M | 1.6 M | 44.5 M | 133.6 M |
 | Encrypted results | 480 K | 480 K | 280 K | 840 K |
-| **Accuracy** | PASS | **0.980** | **0.989** | **0.979** |
-| Harness plaintext model | — | 0.970 | 0.982 | 0.978 |
+| **Accuracy** | PASS | **0.980** | **0.989** | **0.980** |
+| Harness plaintext model | — | 0.960 | 0.981 | 0.978 |
 
-Accuracy varies slightly run to run from encryption noise (size 3 measured 0.9794–0.9796 across
-runs); the table rounds.
+The three sub-rows do not sum to the scored figure: the harness times the whole stage-7 *process*,
+so it also carries ~0.25–0.35 s of interpreter and CUDA-context startup and ciphertext I/O that
+sits outside the submission's own timers.
+
+Accuracy varies slightly run to run from encryption noise (size 2 measured 0.988–0.990, size 3
+0.9796–0.9798 across runs); the table rounds. The harness plaintext row is the harness's own model
+on the same subset, reported for reference — the encrypted model scores at or above it at every
+size.
 
 ### Why PCMM at medium/large — a controlled A/B
 
@@ -225,22 +234,36 @@ Both schemes, same instances, same machine, same session, same sm_120 library (H
 
 | | HS setup | HS eval | HS scored | PCMM setup | PCMM eval | PCMM scored |
 | --- | --- | --- | --- | --- | --- | --- |
-| size 2 (1000) | 4.34–4.39 s | **0.018 s** | 4.55–4.60 s | 0.19–0.22 s | 0.040–0.046 s | **0.44 s** |
-| size 3 (10000) | 4.35 s | 0.044 s | 4.66 s | 0.20 s | **0.042 s** | **0.57 s** |
+| size 2 (1000) | 6.93 s | 7.77 ms | 7.25 s | 0.048 s | **0.91 ms** | **0.43 s** |
+| size 3 (10000) | 6.66 s | 76.8 ms | 7.13 s | 0.045 s | **2.63 ms** | **0.50 s** |
 
-**PCMM wins on setup, not arithmetic.** It needs no rotation keys at all (54 K of key material
-against HS's 174.8 M), so it skips the ~4.4 s of key deserialization and diagonal encoding HS
-re-pays *every run*. Since the harness times the whole stage-7 process, that is what gets scored,
-and PCMM lands 8–10× ahead.
+**PCMM wins on both setup and arithmetic at these sizes.** On setup it needs no rotation keys at
+all (54 K of key material against HS's 174.8 M), so it skips the ~6.7 s of key deserialization and
+diagonal encoding HS re-pays *every run* — about 145× less setup. On evaluation it is 8.5× faster
+at 1000 images and 29× faster at 10000. Since the harness times the whole stage-7 process, the
+scored figure combines the two and PCMM lands 14–17× ahead.
 
-On pure evaluation the two cross over right about where the split is placed: HS is ~2.4× faster at
-1000 images, and they are level at 10000. Two honest qualifications:
+The evaluation gap widens with batch size because the two scale differently: HS packs a fixed 128
+images per ciphertext, so 1000 images need 8 ciphertexts and 10000 need 79, and its cost tracks
+that count almost exactly (7.77 ms → 76.8 ms, ~10× for 10× the images). PCMM's GEMM amortizes over
+the batch instead (0.91 ms → 2.63 ms, 2.9× for the same 10×). This is why the split is on instance
+size rather than a tuning constant.
 
-- **If HS's setup were amortized** (a long-running server loading keys once), HS would be the
-  faster choice at size 2. The split is right *for this benchmark's cost model*, which re-pays
-  setup every run — not a general claim about the algorithms.
-- **PCMM's encrypted input is larger**, not smaller (44.5 M vs 13.1 M at size 2). It wins on compute
-  and key material, loses on upload bandwidth.
+Two honest qualifications:
+
+- **This A/B justifies PCMM at sizes 2–3; it does not locate the crossover.** It forces HS at the
+  sizes PCMM ships at, not the reverse, so it says nothing about how PCMM would fare at 1 or 100
+  images — where HS's single-ciphertext packing is expected to win, and where the split leaves it
+  in place. Establishing the exact crossover point would need the mirrored experiment.
+- **These figures supersede a pre-warm-up, pre-synchronization draft of this table, and reverse its
+  conclusion on arithmetic.** That draft's stage-7 timers closed before the GPU had finished, which
+  under-reported PCMM by roughly 4.7× and made HS look faster at size 2. Its setup figures were
+  also materially lower than this machine measures (~4.4 s against ~6.9 s for HS). Only the
+  submission's self-reported breakdown was ever affected by the timer bug — the harness's own
+  `Encrypted computation` was honest throughout.
+- **PCMM's encrypted input is larger**, not smaller (44.5 M vs 13.1 M at size 2; 133.6 M vs 129.6 M
+  at size 3, where the gap nearly closes). It wins on compute and key material, and loses on upload
+  bandwidth — most visibly at size 2.
 
 ### Cross-check against HEaaN2's own mlp benchmarks
 
@@ -275,13 +298,9 @@ headline number is that structural difference, not an implementation difference.
 
 Before quoting any ratio:
 
-1. **Setup dominates HS**, so sizes 0–1 are setup-bound: 4.63 s scored against 0.016 s of actual
-   evaluation. For single-shot latency, 4.63 s is the honest number — not 16 ms.
-2. **The table above predates stage 7's warm-up pass and its timer synchronization.** Its
-   evaluation figures are both cold (absorbing first-use CUDA costs a long-running server would
-   amortize) and unsynchronized (closing before the GPU finished). Both are fixed now, and the
-   official measurements will be re-taken with them in place.
-3. **Reference numbers are CPU; ours are GPU.** Not the same hardware.
+1. **Setup dominates HS**, so sizes 0–1 are setup-bound: 7.04 s scored against 1.01 ms of actual
+   evaluation. For single-shot latency, 7.04 s is the honest number — not 1 ms.
+2. **Reference numbers are CPU; ours are GPU.** Not the same hardware.
 
 ---
 
