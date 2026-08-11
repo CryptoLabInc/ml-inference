@@ -69,7 +69,7 @@ constexpr double MNIST_STD = 0.3081;
 // One image occupies COORD_DIM padded coordinates; coordinate c of image i
 // lives in slot c * IMAGES_PER_CTXT + i. 484 pads to 512 rather than 1024,
 // which is what fits 128 images in a ciphertext instead of 64 -- see the crop
-// discussion in README.md.
+// discussion in DESIGN.md.
 //===========================================================================
 
 constexpr u32 LOG_DEGREE = 17;

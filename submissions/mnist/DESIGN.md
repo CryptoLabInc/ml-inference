@@ -125,8 +125,29 @@ Every stage binary parses the size and dispatches; the harness contract (seven f
 `server_preprocess_model` is invoked **with no arguments**, so it cannot know the instance size or
 reach `io/<size>/public_keys`. HS's `MatrixVectorEval` encodes diagonals in its constructor on the
 rotation keys' device; PCMM's `buildModel` encodes at batch-size-dependent shapes. Neither fits in
-stage 3, so both happen in stage 7 — which therefore reports *setup* and *evaluation* separately in
-`server_reported_steps.json`. The reference submission has the same shape (its stage 3 is a no-op).
+stage 3, so both happen in stage 7 — which therefore reports *setup*, *warm-up* and *evaluation*
+separately in `server_reported_steps.json`. The reference submission has the same shape (its
+stage 3 is a no-op).
+
+**Warm-up.** Between setup and the timed evaluation, stage 7 runs one full inference pass and
+discards the result — the same discarded pass HEaaN2's own mlp benchmarks run. The first use of
+each CUDA kernel pays module loading, the first allocation grows the memory pool, and the NTT
+workspace is built lazily; without the warm-up those one-time costs land inside the reported
+evaluation, which then understates a warm server (and is not comparable to HEaaN2's benchmark
+figures). Stated plainly: the harness times stage 7 as one process, so the warm-up moves nothing
+out of the harness's own `Encrypted computation` — it *adds* roughly one warm evaluation
+(tens of ms) to it, and that price is accepted for an honest evaluation figure.
+
+**Device synchronization.** The stage-7 timers call `cudaDeviceSynchronize()` at both ends, as
+HEaaN2's own mlp benchmarks do. Kernel launches are asynchronous, so an unsynchronized timer
+closes while the GPU is still working and reports launch time rather than completion time — for
+PCMM at 1000 images that under-reported the evaluation by ~4.7× (0.25 ms against a true 1.19 ms).
+The cost was never lost, only misattributed: it resurfaced in whatever forced completion next
+(the result serialization), which the harness still counted. Only the submission's own
+`server_reported_steps.json` breakdown was affected, never the harness's `Encrypted computation`.
+
+With both in place the submission's evaluation matches the library benchmark on identical
+hardware, weights and batch — see [§4](#4-results).
 
 ---
 
@@ -221,6 +242,29 @@ On pure evaluation the two cross over right about where the split is placed: HS 
 - **PCMM's encrypted input is larger**, not smaller (44.5 M vs 13.1 M at size 2). It wins on compute
   and key material, loses on upload bandwidth.
 
+### Cross-check against HEaaN2's own mlp benchmarks
+
+The library ships its own benchmarks for both circuits (`mlp/MLInference_128`,
+`mlp/MLInference_Large`). Run on **1× RTX 4090 (sm_89)** — a development box, not the bench
+machine — against the same sm_89 library build, this submission's weights and seed 3, the
+submission's warm, synchronized evaluation lands on the library's own figure:
+
+| | HEaaN2 benchmark | This submission (stage 7) |
+| --- | --- | --- |
+| HS, one ciphertext | 1.434 ± 0.044 ms (20 runs) | 1.439 ms |
+| PCMM, 1000 images | 1.378 ± 0.105 ms (20 runs) | 1.187 ms |
+
+The submission is marginally *faster* on PCMM only because it brackets the whole inference in one
+timer, where the benchmark sums six separately-synchronized sub-timers. Treat the two as equal:
+the submission adds no evaluation overhead over calling the library directly.
+
+**What does not transfer is setup.** The benchmark generates keys and encodes the model once, in
+process, and reports that as untimed "offline" work; it then measures many evaluations against it.
+The submission cannot: the harness runs stage 7 as a fresh process per run, so it re-pays key
+*deserialization from disk* (174.8 MB of rotation keys for HS) and diagonal encoding every time,
+and the harness scores that. The gap between this submission's scored figure and the library's
+headline number is that structural difference, not an implementation difference.
+
 ### Against the reference OpenFHE submission
 
 | | size 0 | size 1 | size 2 |
@@ -233,8 +277,10 @@ Before quoting any ratio:
 
 1. **Setup dominates HS**, so sizes 0–1 are setup-bound: 4.63 s scored against 0.016 s of actual
    evaluation. For single-shot latency, 4.63 s is the honest number — not 16 ms.
-2. **Evaluation figures are cold.** Each stage is a fresh process, paying context and kernel
-   initialization a long-running server would amortize.
+2. **The table above predates stage 7's warm-up pass and its timer synchronization.** Its
+   evaluation figures are both cold (absorbing first-use CUDA costs a long-running server would
+   amortize) and unsynchronized (closing before the GPU finished). Both are fixed now, and the
+   official measurements will be re-taken with them in place.
 3. **Reference numbers are CPU; ours are GPU.** Not the same hardware.
 
 ---

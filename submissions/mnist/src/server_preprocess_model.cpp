@@ -17,7 +17,8 @@
 // forms the two schemes want: the HS scheme's padded p x q diagonal layout,
 // and PCMM's raw (unpadded) CSV shapes. Both schemes read the same source
 // weights -- this just avoids parsing the CSVs twice across two stage
-// binaries. See README.md for how the two halves' timing is reported.
+// binaries. See "Stage split" in DESIGN.md for how the two halves' timing
+// is reported.
 
 #include "mlp_pcmm.hpp"
 #include "mlp_pipeline.hpp"

@@ -106,7 +106,7 @@ void runHS(const InstanceParams &prms) {
 // client-side operation, and sk never leaves seckeydir() (which the harness
 // does not measure), but it is a real, disclosed asymmetry against the HS
 // path's public-key encryption. See "Encryption: public key vs symmetric key"
-// in README.md.
+// in DESIGN.md.
 void runPcmm(const InstanceParams &prms) {
     const Levels levels = pcmm::buildLevels();
 
