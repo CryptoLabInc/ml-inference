@@ -123,11 +123,13 @@ Every stage binary parses the size and dispatches; the harness contract (seven f
 | `client_postprocess` | argmax — cleartext, same output format both schemes | ← |
 
 `server_preprocess_model` is invoked **with no arguments**, so it cannot know the instance size or
-reach `io/<size>/public_keys`. HS's `MatrixVectorEval` encodes diagonals in its constructor on the
-rotation keys' device; PCMM's `buildModel` encodes at batch-size-dependent shapes. Neither fits in
-stage 3, so both happen in stage 7 — which therefore reports *setup*, *warm-up* and *evaluation*
-separately in `server_reported_steps.json`. The reference submission has the same shape (its
-stage 3 is a no-op).
+reach `io/<size>/public_keys`. HS's `MatrixVectorEval` encodes diagonals in its constructor, on the
+rotation keys' device and behind an interface that cannot hand the encoded state back; PCMM's
+`buildModel` encodes at batch-size-dependent shapes. Neither fits in stage 3, so both happen in
+stage 7 — which therefore reports *setup*, *warm-up* and *evaluation* separately in
+`server_reported_steps.json`. The reference submission has the same shape (its stage 3 is a no-op).
+HS's share of that setup is ~8.4 s of diagonal encoding that is genuinely model-only work; see
+[§4](#4-results) for why it cannot currently move to stage 3.
 
 **Warm-up.** Between setup and the timed evaluation, stage 7 runs one full inference pass and
 discards the result — the same discarded pass HEaaN2's own mlp benchmarks run. The first use of
@@ -260,10 +262,25 @@ the submission adds no evaluation overhead over calling the library directly.
 
 **What does not transfer is setup.** The benchmark generates keys and encodes the model once, in
 process, and reports that as untimed "offline" work; it then measures many evaluations against it.
-The submission cannot: the harness runs stage 7 as a fresh process per run, so it re-pays key
-*deserialization from disk* (174.8 MB of rotation keys for HS) and diagonal encoding every time,
-and the harness scores that. The gap between this submission's scored figure and the library's
-headline number is that structural difference, not an implementation difference.
+It is not cheaper — `MLInference_128` spends ~14.6 s of its 14.67 s wall time there, doing the same
+256-diagonal encoding — it simply amortizes it over many evaluations, which is the right shape for
+a throughput benchmark. The harness models a cold client→server round trip instead, so stage 7 is a
+fresh process every run and re-pays that setup each time.
+
+Measured split of HS setup at size 0 (same 4090):
+
+| | |
+| --- | ---: |
+| Rotation-key deserialization (174.8 M) | 0.27 s |
+| Weight read | 0.002 s |
+| **Diagonal encoding (`MatrixVectorEval` construction ×2)** | **8.44 s** |
+
+So it is encoding, not I/O. Those encoded diagonals depend only on the weights, the layer geometry
+and the level/scale — every one a compile-time constant — so for HS they are genuinely
+instance-independent, model-only artifacts, exactly what stage 3 exists for. They stay in stage 7
+today only because `MatrixVectorEval` encodes inside its constructor and exposes no way to carry
+the encoded state across a process boundary (no constructor from pre-encoded diagonals, no
+serialization). PCMM is unaffected: its setup is 0.12 s.
 
 ### Against the reference OpenFHE submission
 
