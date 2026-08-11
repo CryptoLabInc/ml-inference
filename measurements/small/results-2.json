@@ -1,37 +1,41 @@
 {
+  "model_name": "mlp",
+  "dataset_name": "mnist",
   "Timing": {
-    "Test dataset generation": "4.1259s",
-    "Key Generation": "0.9661s",
-    "Encrypted model preprocessing": "0.0037s",
-    "Input generation": "1.7968s",
-    "Input preprocessing": "0.0223s",
-    "Input encryption": "3.0776s",
-    "Encrypted computation": "641.9873s",
-    "Result decryption": "2.5322s",
-    "Result postprocessing": "0.003s",
-    "Harness: Run inference for harness plaintext model": "1.7912s",
-    "Harness: Run quality check": "0.0003s",
-    "Total": "656.3064s"
+    "Test dataset generation": "3.7864s",
+    "Key Generation": "0.498s",
+    "Encrypted model preprocessing": "0.0673s",
+    "Input generation": "1.8614s",
+    "Input preprocessing": "0.0867s",
+    "Input encryption": "0.3807s",
+    "Encrypted computation": "6.9278s",
+    "Result decryption": "0.2987s",
+    "Result postprocessing": "0.0619s",
+    "Harness: Run inference for harness plaintext model": "1.7624s",
+    "Harness: Run quality check": "0.0007s",
+    "Total": "15.732s"
   },
   "Bandwidth": {
-    "Public and evaluation keys": "1.0G",
-    "Encrypted input": "500.3M",
-    "Encrypted results": "100.2M"
+    "Public and evaluation keys": "174.8M",
+    "Encrypted input": "1.6M",
+    "Encrypted results": "480.1K"
   },
   "Quality": {
     "Encrypted model quality": {
+      "correct_predictions": 98,
+      "total_samples": 100,
+      "accuracy": 0.98
+    },
+    "Harness model quality": {
       "correct_predictions": 96,
       "total_samples": 100,
       "accuracy": 0.96
-    },
-    "Harness model quality": {
-      "correct_predictions": 100,
-      "total_samples": 100,
-      "accuracy": 1.0
     }
   },
   "Server Reported": {
-    "Encrypted computation": "628.8870000000001s",
-    "Total": "628.8870000000001s"
+    "Model setup (key load + diagonal/weight encoding)": "6.638701s",
+    "Warm-up (one discarded inference pass)": "0.005431s",
+    "Encrypted computation": "0.000996s",
+    "Total": "6.645127s"
   }
 }
