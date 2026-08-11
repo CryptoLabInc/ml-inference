@@ -97,7 +97,11 @@ None are needed. The build works with the environment untouched.
 | `HEAAN2_NVCC` | auto | Path to `nvcc` if detection picks the wrong one |
 | `HEAAN2_CUDA_HOST_COMPILER` | the `g++` beside `nvcc` | Host compiler nvcc drives |
 
-The remaining `HEAAN2_*` variables in `build_task.sh` apply only when building HEaaN2 from source.
+The remaining `HEAAN2_*` variables in `build_task.sh` apply only when building HEaaN2 from source
+(`HEAAN2_ROOT=<checkout>`). That path builds into `third_party/heaan2/build` and installs to
+`third_party/heaan2/install` — both inside *this* repository and gitignored here. It never writes
+into the HEaaN2 checkout, which is treated as a read-only input; override with `HEAAN2_BUILD_DIR`
+and `HEAAN2_DIR` if you want them elsewhere.
 
 `nvcc` is located via `CUDACXX`, then `$CONDA_PREFIX/bin`, then `PATH`, then an existing
 `CMakeCache.txt` — it is needed because `HEaaN2Config.cmake` calls `find_package(CUDAToolkit)`. The

@@ -45,7 +45,30 @@ if [[ "$(basename "$TASK_DIR")" == "mnist" ]]; then
         # Opt-in: build HEaaN2 from a source checkout instead of using the
         # vendored copy above -- e.g. to target a different GPU architecture,
         # or to build without CUDA (HEAAN2_BUILD_CUDA=OFF).
-        HEAAN2_INSTALL="${HEAAN2_DIR:-$HEAAN2_ROOT/install}"
+        #
+        # Both the build tree and the install prefix live INSIDE this repository
+        # (third_party/, beside openfhe and libtorch, and gitignored here) and
+        # never inside $HEAAN2_ROOT. A source checkout is an input to this build,
+        # not scratch space: writing into it leaves untracked build output in
+        # someone's HEaaN2 working copy, and -- worse -- a stale install/ left
+        # behind there is silently reused by the "install already exists" check
+        # below, so a later build can pick up a library compiled for the wrong
+        # GPU architecture without saying anything.
+        #
+        # It also sidesteps $HEAAN2_ROOT/build, which is what HEaaN2's own
+        # CMakePresets.json uses as binaryDir with -G Ninja: any checkout ever
+        # configured by hand already holds a cache there whose generator,
+        # compiler and CUDA toolkit differ from what this script asks for. CMake
+        # cannot reconcile that, and the failure is not local to the top-level
+        # cache -- FetchContent's per-dependency sub-builds inherit the
+        # generator, so the configure dies inside CPM with
+        #   "generator : Ninja / Does not match the generator used previously:
+        #    Unix Makefiles"
+        # while a stale CUDAToolkit_ROOT quietly pins the wrong CUDA.
+        #
+        # Set HEAAN2_BUILD_DIR / HEAAN2_DIR to override either location.
+        HEAAN2_BUILD="${HEAAN2_BUILD_DIR:-$ROOT/third_party/heaan2/build}"
+        HEAAN2_INSTALL="${HEAAN2_DIR:-$ROOT/third_party/heaan2/install}"
 
         # Which GPU architectures to emit cubins for. This MUST be passed: CMake
         # always seeds CMAKE_CUDA_ARCHITECTURES in the cache with the compiler's
@@ -67,20 +90,6 @@ if [[ "$(basename "$TASK_DIR")" == "mnist" ]]; then
         # on a GPU-less submit node. "120-real" requires CUDA >= 12.8.
         HEAAN2_CUDA_ARCH="${HEAAN2_CUDA_ARCH:-75-real;80-real;89-real;120-real}"
         [[ "$HEAAN2_BUILD_CUDA" == "ON" ]] || HEAAN2_CUDA_ARCH=""
-
-        # Build HEaaN2 in a directory of this script's own, NOT $HEAAN2_ROOT/build.
-        # That path is what HEaaN2's own CMakePresets.json uses as binaryDir, with
-        # -G Ninja -- so any checkout that has ever been configured by hand already
-        # holds a cache there whose generator, compiler and CUDA toolkit differ from
-        # what this script asks for. CMake cannot reconcile that, and the failure is
-        # not local to the top-level cache: FetchContent's per-dependency sub-builds
-        # inherit the generator, so the configure dies inside CPM with
-        #   "generator : Ninja / Does not match the generator used previously:
-        #    Unix Makefiles"
-        # while a stale CUDAToolkit_ROOT quietly pins the wrong CUDA. Nesting one
-        # level down keeps this tree inside HEaaN2's .gitignore ("build/") without
-        # sharing that cache, and leaves a developer's own build untouched.
-        HEAAN2_BUILD="${HEAAN2_BUILD_DIR:-$HEAAN2_ROOT/build/ml-inference}"
 
         # nvcc is frequently not on PATH when this script runs (CMake picks it up
         # from CUDACXX or a previous cache), yet both configures below need it: the
