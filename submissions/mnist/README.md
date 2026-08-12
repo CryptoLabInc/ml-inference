@@ -4,8 +4,9 @@ FHE submission for the HomomorphicEncryption.org `ml-inference` benchmark (`--da
 built on [HEaaN2](https://heaan.io), Crypto Lab's CKKS library. Replaces the reference
 OpenFHE/HEIR submission in this directory. The harness is unmodified.
 
-> **Security notice.** The ≥128-bit parameter justification is **not finalised** for either scheme
-> — see [DESIGN.md §5](DESIGN.md#5-security). Do not cite these parameters as reviewed.
+> **Security notice.** The ≥128-bit parameter justification is **not finalised** for either scheme.
+> The policy the code enforces, and what a review still has to ratify, are set out in
+> [DESIGN.md §5](DESIGN.md#5-security). Do not cite these parameters as reviewed.
 
 ## At a glance
 
@@ -14,10 +15,10 @@ OpenFHE/HEIR submission in this directory. The harness is unmodified.
 | Model | 2-layer MLP, `fc1(128×484) → x² → fc2(10×128)`, BN folded. Plaintext accuracy 97.96% |
 | Accuracy | 0.980 / 0.989 / 0.979 at sizes 1 / 2 / 3, against the harness model's 0.960 / 0.981 / 0.978 |
 | Scheme | CKKS on the conjugate-invariant subring, no bootstrapping |
+| Security | uniform-ternary secrets, ≥128-bit budget per [DESIGN.md §5](DESIGN.md#5-security) — **not yet reviewed** |
 | Hardware | **NVIDIA sm_120 (Blackwell) GPU required** — the vendored HEaaN2 binary targets sm_120 only, with no PTX fallback. [Check first](BUILDING.md#-this-submission-requires-an-sm_120-gpu) |
 
-Two circuits, chosen by instance size alone (`mlp::usePcmm`) — same model, same weights, different
-packing:
+Two circuits, chosen by instance size alone — same model, same weights, different packing:
 
 | Size | Scheme | Why |
 | --- | --- | --- |

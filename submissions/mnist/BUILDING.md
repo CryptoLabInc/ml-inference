@@ -83,108 +83,9 @@ same arrangement as CryptoLab's
 [Zn-multiplication submission](https://github.com/CryptoLabInc/Zn-multiplication). Third-party
 dependencies are listed in [LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY).
 
-`scripts/build_task.sh` builds against `install/` by default. It retains a from-source path
-(`HEAAN2_ROOT` and friends) that is usable only with access to the HEaaN2 source tree. **Verifying
-this submission never needs it** — it exists so Crypto Lab developers can build against a newer
-HEaaN2 than the vendored snapshot; see [Building against a newer
-HEaaN2](#building-against-a-newer-heaan2).
-
-## Building against a newer HEaaN2
-
-*Crypto Lab developers only. Not needed to build, run or verify this submission.*
-
-The library in [`install/`](install/) is a **frozen snapshot**, and nothing in the build ever
-refreshes it. So when HEaaN2 gains a new type or function and you write code here that uses it, this
-branch still compiles against the old headers and fails like this:
-
-```
-error: 'MatrixVectorEvalEncoded' in namespace 'heaan' does not name a type;
-       did you mean 'MatrixVectorEvalParams'?
-```
-
-That message means **the vendored headers are older than your code** — not that you typed the name
-wrong. CMake suggests the closest name it can see, which is a real type from the *old* API, so the
-suggestion is always a red herring. Confirm it in one line:
-
-```bash
-grep -c YourNewTypeName submissions/mnist/install/include/HEaaN2/*.hpp | grep -v ':0'
-```
-
-No output means the vendored snapshot does not have it yet. You have two ways forward.
-
-### Option A — build against a HEaaN2 checkout (day-to-day development)
-
-Builds the library into `third_party/heaan2/` inside this repo (gitignored) and never writes into
-your HEaaN2 checkout, which is treated as a read-only input:
-
-```bash
-rm -rf submissions/mnist/build && \
-HEAAN2_ROOT=/path/to/HEaaN2 HEAAN2_CUDA_ARCH="120-real" \
-  ./scripts/build_task.sh ./submissions/mnist
-```
-
-HEaaN2 is only rebuilt when `third_party/heaan2/install` is **missing**. After changing HEaaN2
-source, delete it as well or you will silently link the previous build:
-
-```bash
-rm -rf third_party/heaan2 submissions/mnist/build
-```
-
-Once the library is built, rebuild just the submission against it — much faster, no HEaaN2 rebuild:
-
-```bash
-rm -rf submissions/mnist/build && \
-HEAAN2_DIR="$PWD/third_party/heaan2/install" ./scripts/build_task.sh ./submissions/mnist
-```
-
-### Option B — re-vendor, to carry the update into this branch
-
-Option A leaves the stage binaries pointing at `third_party/`, which is **not** the submission
-configuration. Once the HEaaN2 side is final, copy the install in so a bare clone builds again:
-
-```bash
-rm -rf submissions/mnist/install
-cp -a third_party/heaan2/install submissions/mnist/install
-rm -rf submissions/mnist/build
-./scripts/build_task.sh ./submissions/mnist
-```
-
-Then, in order:
-
-1. Re-run the [architecture check](#-this-submission-requires-an-sm_120-gpu) — a rebuild can quietly
-   change which cubins are present, and sm_120-only with no PTX is a precondition for quoting any
-   timing.
-2. Confirm you linked what you think you did:
-   `ldd submissions/mnist/build/server_encrypted_compute | grep heaan2`
-   should name `submissions/mnist/install/`, not `third_party/`.
-3. **Re-take every measurement.** A different library invalidates the committed runs and every
-   figure in [DESIGN.md §4](DESIGN.md#4-results).
-
-### ⚠ Changing which HEaaN2 you build against does nothing until you delete the build tree
-
-`find_package(HEaaN2)` stores the install it resolved as `HEaaN2_DIR` in
-`submissions/mnist/build/CMakeCache.txt`, and every later configure **reuses that cached value
-before it looks at `CMAKE_PREFIX_PATH`**. Setting `HEAAN2_DIR` or `HEAAN2_ROOT` on a build tree that
-already exists therefore changes nothing: `build_task.sh` prints your new prefix, CMake records it,
-and the compile still uses the old install. Nothing warns you.
-
-The signature is a cache holding two paths that disagree, while the compiler errors quote the old
-include directory:
-
-```bash
-grep -E "^HEaaN2_DIR|^CMAKE_PREFIX_PATH" submissions/mnist/build/CMakeCache.txt
-```
-
-```
-CMAKE_PREFIX_PATH:UNINITIALIZED=/…/third_party/heaan2/install          ← what you asked for
-HEaaN2_DIR:PATH=/…/submissions/mnist/install/lib/cmake/HEaaN2          ← what is actually used
-```
-
-Always chain the wipe into the same command so it cannot be half-run:
-
-```bash
-rm -rf submissions/mnist/build && HEAAN2_DIR=… ./scripts/build_task.sh ./submissions/mnist
-```
+`scripts/build_task.sh` builds against `install/` by default, and that is the only path this
+submission is verified through. It retains a from-source path (`HEAAN2_ROOT` and friends) usable
+only with access to the HEaaN2 source tree; **verifying this submission never needs it.**
 
 ## Environment variables
 
@@ -196,23 +97,19 @@ None are needed. The build works with the environment untouched.
 | `HEAAN2_NVCC` | auto | Path to `nvcc` if detection picks the wrong one |
 | `HEAAN2_CUDA_HOST_COMPILER` | the `g++` beside `nvcc` | Host compiler nvcc drives |
 
-The remaining `HEAAN2_*` variables in `build_task.sh` apply only when building HEaaN2 from source
-(`HEAAN2_ROOT=<checkout>`). That path builds into `third_party/heaan2/build` and installs to
-`third_party/heaan2/install` — both inside *this* repository and gitignored here. It never writes
-into the HEaaN2 checkout, which is treated as a read-only input; override with `HEAAN2_BUILD_DIR`
-and `HEAAN2_DIR` if you want them elsewhere.
+The remaining `HEAAN2_*` variables in `build_task.sh` apply only to the from-source path, which
+this submission does not use.
 
 `nvcc` is located via `CUDACXX`, then `$CONDA_PREFIX/bin`, then `PATH`, then an existing
-`CMakeCache.txt` — it is needed because `HEaaN2Config.cmake` calls `find_package(CUDAToolkit)`. The
-conda prefix is checked before `PATH` deliberately: a system `/usr/local/cuda-*/bin` exported from a
+`CMakeCache.txt` — it is needed because the CUDA toolkit is resolved at configure time. The conda
+prefix is checked before `PATH` deliberately: a system `/usr/local/cuda-*/bin` exported from a
 login profile can otherwise outrank an activated environment. Confirm the `Found CUDAToolkit` line
 names a 12.8.x toolkit.
 
 **A stale build tree is sticky.** `build_task.sh` reuses `submissions/mnist/build` and its CMake
-cache, so if you change `HEAAN2_DIR`, `HEAAN2_ROOT` or the toolchain you must
-`rm -rf submissions/mnist/build` first — otherwise the old settings persist *silently*, and the
-build keeps using the previous HEaaN2 no matter what you pass. See
-[Changing which HEaaN2 you build against](#-changing-which-heaan2-you-build-against-does-nothing-until-you-delete-the-build-tree).
+cache, so if you change `HEAAN2_DIR` or the toolchain you must `rm -rf submissions/mnist/build`
+first — otherwise the old settings persist *silently* and the build keeps using the previous
+configuration no matter what you pass.
 
 `scripts/get_openfhe.sh` is untouched and still runs on every harness invocation:
 `submissions/cifar10` needs OpenFHE. This submission does not.
@@ -222,8 +119,6 @@ build keeps using the previous HEaaN2 no matter what you pass. See
 | Symptom | Cause and fix |
 | --- | --- |
 | `no kernel image is available for execution on the device`, or a launch failure on the first homomorphic operation | Your GPU is not sm_120, and the vendored library has no PTX to fall back on. Confirm with the [architecture check](#-this-submission-requires-an-sm_120-gpu). This needs a library built for your architecture; it is not fixable from this repository. |
-| `'<Something>' in namespace 'heaan' does not name a type; did you mean '<SomethingElse>'?` | The vendored headers in `install/` are older than the code you wrote — the suggested name is from the old API and is a red herring. See [Building against a newer HEaaN2](#building-against-a-newer-heaan2). |
-| You pointed `HEAAN2_DIR` / `HEAAN2_ROOT` at a newer HEaaN2, but the errors still quote `submissions/mnist/install/include/` | `HEaaN2_DIR` is cached in `submissions/mnist/build` and wins over `CMAKE_PREFIX_PATH`. `rm -rf submissions/mnist/build` and rebuild; changing the variable alone has no effect. [Details](#-changing-which-heaan2-you-build-against-does-nothing-until-you-delete-the-build-tree). |
 | `identifier "__is_array" is undefined` while CMake detects the CUDA compiler | nvcc probed one `gcc` but preprocessed with another — it prepends its own `bin/` to `PATH`, so this appears when a conda toolchain is *not* active. `build_task.sh` pins the host compiler; if it persists, set `HEAAN2_CUDA_HOST_COMPILER`. |
 | `Could not find nvcc ... set CUDAToolkit_ROOT` | `nvcc` not on `PATH` and not auto-detected. Put the CUDA toolkit on `PATH` or set `HEAAN2_NVCC`. |
 | `undefined reference to 'cuda…@libcudart.so.12'` at link, or `error while loading shared libraries: libcudart.so.12` at run | Stale `submissions/mnist/build`. `rm -rf` it and rebuild. |

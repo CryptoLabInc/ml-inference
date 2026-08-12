@@ -28,7 +28,7 @@ Two circuits evaluate it, chosen by instance size alone (`mlp::usePcmm` in
 
 | | |
 | --- | --- |
-| Ring | N = 2^15, CI subring (ePrint 2018/952), `GRAFTED`, 16384 slots |
+| Ring | N = 2^15, CI subring (ePrint 2018/952), 16384 slots |
 | Modulus chain | 30 + 3×25 ≈ 105 bits, 4 levels, no bootstrapping |
 | Secret key | uniform ternary (hw = 0), sampled directly at 2^15 |
 | Noise / SWK budget | σ = 3.2 / `maxBits128(14) = 430` bits, margin 5.0 |
@@ -50,26 +50,27 @@ matvec's giant steps instead, which double-hoisted BSGS accumulates behind a sin
 
 ### Scheme B — PCMM (sizes 1–3)
 
-Feature = ciphertext **row** (the GEMM contraction dim), image = **column/slot** — the opposite
-convention from HS. Written against HEaaN2's public API.
+Feature = ciphertext **row** (the GEMM contraction dimension), image = **column/slot** — the
+opposite convention from HS.
 
 | | |
 | --- | --- |
-| Ring | N = 2^13, CI subring, `GRAFTED`, 4096 coefficients/message |
+| Ring | N = 2^13, CI subring, 4096 coefficients/message |
 | Modulus chain | 28 + 3×22 ≈ 94 bits, 4 levels, no bootstrapping |
-| Secret key | uniform ternary (hw = 0), sampled **directly** at 2^13 — no lifting |
+| Secret key | uniform ternary (hw = 0), sampled directly at 2^13 |
 | Noise / SWK budget | σ = 3.2 / `maxBits128(12) = 106` bits, margin 5.0 |
 
 ```
-L3  encrypt X, encode U1 → fc1 pcmm+rescale   → L2
-L2  x²: tensor → rescale → L1, relin @L1
-L1  encode U2 → fc2 pcmm+rescale              → L0
+L3  encrypt X, encode U1 → fc1 GEMM + rescale → L2
+L2  x²: square → rescale → L1, relinearize @L1
+L1  encode U2 → fc2 GEMM + rescale            → L0
 L0  +b2 (plaintext add, no level cost), decrypt
 ```
 
-One message holds 4096 images; larger batches split into further *blocks* inside a single
-`ICtMatrix`, transparently. `x²` runs tensor → rescale → relin (not the usual tensor → relin →
-rescale), so the relin key is built at the *post-rescale* level.
+One message holds 4096 images; larger batches split into further *blocks* within a single encrypted
+matrix. The squaring runs square → rescale → relinearize rather than the more usual
+square → relinearize → rescale, so the relinearization key is built at the *post-rescale* level —
+which is why its modulus is one level's worth rather than the whole chain's.
 
 **Bias fold.** `b1` rides as an extra column of `U1` (`128×485`) against an appended ones-row in the
 packed input, so fc1's pcmm computes `W1·X + b1` directly. `b2` is *not* folded that way — it would
@@ -79,15 +80,14 @@ per block, which a zero-filled matrix already provides).
 
 ### Encryption: public key vs symmetric key
 
-An API constraint, not a design choice. HEaaN2's `EnDecryptor` has a public-key overload for plain
-ciphertexts but **only a secret-key overload for matrices** (no `IEncKey` overload for
-`ICtMatrix`). So HS encrypts under a public encryption key; **PCMM encrypts under the client's own
-secret key.** Both are purely client-side and the secret key never leaves `seckeydir()` (which the
-harness does not measure) — but it is a real asymmetry, disclosed here rather than left to be
-noticed.
+The two schemes differ in how the client encrypts, and it is a constraint rather than a preference:
+matrix-shaped ciphertexts are encryptable only under a secret key. So **HS encrypts under a public
+encryption key, PCMM under the client's own secret key.** Both are purely client-side, and the
+secret key never leaves the client's key directory (which the harness does not measure) — but it is
+a real asymmetry, disclosed here rather than left to be noticed.
 
-Moving size 1 onto PCMM widens it: public-key encryption is now exercised at size 0 alone. Keeping
-size 0 on HS is deliberate for that reason — it is what stops the submission from resting on the
+Because sizes 1–3 run PCMM, public-key encryption is exercised at size 0 alone. Keeping size 0 on
+HS is deliberate for that reason — it is what stops the submission from resting on the
 symmetric-key path everywhere.
 
 ### Stage split
@@ -100,54 +100,46 @@ Every stage binary parses the size and dispatches; the harness contract (seven f
 | `client_key_generation` | sk, public enc key, 2× rotation keys, fc1 fold keys, relin key | sk, relin key only |
 | `server_preprocess_model` | caches CSV weights in padded p×q layout | same call also caches raw CSV shapes |
 | `client_preprocess_input` | normalize + center-crop — cleartext, identical both schemes ([§2](#2-cleartext-pre--and-post-processing)) | ← |
-| `client_encode_encrypt_input` | 32 img/ciphertext, **public** key | whole batch → 1 `ICtMatrix`, **secret** key |
+| `client_encode_encrypt_input` | 32 img/ciphertext, **public** key | whole batch → one encrypted matrix, **secret** key |
 | `server_encrypted_compute` | the entire inference, on ciphertext | ← |
-| `client_decrypt_decode` | read slot `r*32+i` | read column `(i/ringDim)*degree + i%ringDim` of row `r` |
+| `client_decrypt_decode` | read slot `r*32+i` | read the column for image `i` of row `r` |
 | `client_postprocess` | argmax — cleartext, same output format both schemes | ← |
 
-`server_preprocess_model` is invoked **with no arguments**, so it cannot know the instance size or
-reach `io/<size>/public_keys`. That constrains what each scheme can hoist into stage 3, and the two
-answers differ:
+`server_preprocess_model` is invoked **with no arguments**, so it cannot know the instance size.
+That constrains what each scheme can hoist into stage 3, and the two answers differ:
 
 - **HS encodes its diagonals in stage 3.** The diagonal geometry is fixed (`fc1` 128×512, `fc2`
   128×128) and does not depend on the batch size — batch size only changes how many ciphertexts are
-  fed through — so stage 3 has everything it needs without knowing the instance. `MatrixVectorEval`
-  would normally encode inside its constructor, on the rotation keys' device, behind an interface
-  that cannot return the encoded state; `MatrixVectorEvalEncoded` performs that encoding separately
-  from any key material, taking only the gadget decomposition, and `serial::save`/`load` carry the
-  result across the process boundary. Stage 7 then rebuilds the evaluator from the encoded
-  diagonals, skipping what was the expensive half of its setup.
-- **PCMM still encodes in stage 7.** `buildModel` encodes at batch-size-dependent shapes, which
-  stage 3 cannot know. This costs it little: PCMM's setup is ~50 ms either way, because it has no
-  rotation keys to deserialize.
+  fed through — so stage 3 has everything it needs without knowing the instance. The encoding needs
+  no key material, and the encoded diagonals are serialized for stage 7 to pick up, so stage 7
+  skips what was the expensive half of its setup.
+- **PCMM encodes in stage 7.** Its weight encoding depends on the batch size, which stage 3 cannot
+  know. This costs it little: PCMM's setup is ~50 ms either way, because it has no rotation keys to
+  load.
 
 Stage 7 reports *setup*, *warm-up* and *evaluation* separately in `server_reported_steps.json`. The
 reference submission leaves stage 3 a no-op and pays everything in stage 7.
 
-The harness times stage 3 as `Encrypted model preprocessing`, so this moves HS's ~7.3 s of diagonal
-encoding out of the scored `Encrypted computation` rather than eliminating it — it is genuinely
-model-only work, done once per model instead of once per input. [§4](#4-results) reports both
-figures side by side.
+The harness times stage 3 as `Encrypted model preprocessing`, so this moves HS's diagonal encoding
+out of the scored `Encrypted computation` rather than eliminating it — it is genuinely model-only
+work, done once per model instead of once per input. [§4](#4-results) reports both figures side by
+side.
 
 **Warm-up.** Between setup and the timed evaluation, stage 7 runs one full inference pass and
-discards the result — the same discarded pass HEaaN2's own mlp benchmarks run. The first use of
-each CUDA kernel pays module loading, the first allocation grows the memory pool, and the NTT
-workspace is built lazily; without the warm-up those one-time costs land inside the reported
-evaluation, which then understates a warm server (and is not comparable to HEaaN2's benchmark
-figures). Stated plainly: the harness times stage 7 as one process, so the warm-up moves nothing
-out of the harness's own `Encrypted computation` — it *adds* roughly one warm evaluation
-(tens of ms) to it, and that price is accepted for an honest evaluation figure.
+discards the result. The first use of each GPU kernel pays one-time initialization, and the first
+allocations grow internal workspaces; without the warm-up those costs land inside the reported
+evaluation, which then understates a warm server. Stated plainly: the harness times stage 7 as one
+process, so the warm-up moves nothing out of the harness's own `Encrypted computation` — it *adds*
+roughly one warm evaluation (tens of ms) to it, and that price is accepted for an honest evaluation
+figure.
 
-**Device synchronization.** The stage-7 timers call `cudaDeviceSynchronize()` at both ends, as
-HEaaN2's own mlp benchmarks do. Kernel launches are asynchronous, so an unsynchronized timer
-closes while the GPU is still working and reports launch time rather than completion time — for
-PCMM at 1000 images that under-reported the evaluation by ~4.7× (0.25 ms against a true 1.19 ms).
-The cost was never lost, only misattributed: it resurfaced in whatever forced completion next
-(the result serialization), which the harness still counted. Only the submission's own
-`server_reported_steps.json` breakdown was affected, never the harness's `Encrypted computation`.
-
-With both in place the submission's evaluation matches the library benchmark on identical
-hardware, weights and batch — see [§4](#4-results).
+**Device synchronization.** The stage-7 timers synchronize the GPU at both ends. Kernel launches
+are asynchronous, so an unsynchronized timer closes while the GPU is still working and reports
+launch time rather than completion time — for PCMM at 1000 images that under-reported the
+evaluation by ~4.7× (0.25 ms against a true 1.19 ms). The cost was never lost, only misattributed:
+it resurfaced in whatever forced completion next, which the harness still counted. Only the
+submission's own `server_reported_steps.json` breakdown was ever affected, never the harness's
+`Encrypted computation`.
 
 ---
 
@@ -199,10 +191,10 @@ model ([§4](#4-results)).
 Seed 3, through the **unmodified harness**, on 1× RTX 5090 (sm_120). These are the official
 measurements: every figure below is the mean of the three runs committed under
 [`measurements/`](../../measurements/), taken with the stage-7 warm-up and timer synchronization in
-place. All come from a HEaaN2 verified as natively sm_120 by the
-[architecture check](BUILDING.md#-this-submission-requires-an-sm_120-gpu) — a library that falls
-back to JIT-compiling PTX reports several seconds of first-run cost as if it were evaluation time,
-so that check is a precondition for quoting any timing here.
+place, and on hardware that passes the
+[architecture check](BUILDING.md#-this-submission-requires-an-sm_120-gpu). That check is a
+precondition for quoting any timing here: on a mismatched GPU the first run absorbs several seconds
+of just-in-time compilation and reports it as evaluation time.
 
 ### As shipped
 
@@ -294,50 +286,20 @@ Two honest qualifications:
   at size 3, where the gap nearly closes). It wins on compute and key material, and loses on upload
   bandwidth — most visibly at size 2.
 
-### Cross-check against HEaaN2's own mlp benchmarks
+### Where HS's setup goes
 
-The library ships its own benchmarks for both circuits (`mlp/MLInference_128`,
-`mlp/MLInference_Large`). Run on **1× RTX 4090 (sm_89)** — a development box, not the bench
-machine — against the same sm_89 library build, this submission's weights and seed 3, the
-submission's warm, synchronized evaluation lands on the library's own figure:
+HS's stage-7 setup is dominated by *encoding*, not I/O: reading the rotation keys from disk is a
+fraction of it, while encoding the two layers' diagonals is the bulk. Those encoded diagonals
+depend only on the weights, the layer geometry and the level — all fixed — so they are genuinely
+instance-independent, model-only artifacts, which is exactly what stage 3 exists for.
 
-| | HEaaN2 benchmark | This submission (stage 7) |
-| --- | --- | --- |
-| HS, one ciphertext | 1.434 ± 0.044 ms (20 runs) | 1.439 ms |
-| PCMM, 1000 images | 1.378 ± 0.105 ms (20 runs) | 1.187 ms |
+Moving them there ([§1](#stage-split)) is what drops HS's stage-7 setup to ~0.12 s, leaving stage 7
+to load keys and run the inference. PCMM was never affected: its setup is ~50 ms either way,
+because it has no rotation keys and no diagonals to encode.
 
-The submission is marginally *faster* on PCMM only because it brackets the whole inference in one
-timer, where the benchmark sums six separately-synchronized sub-timers. Treat the two as equal:
-the submission adds no evaluation overhead over calling the library directly.
-
-**What does not transfer is setup.** The benchmark generates keys and encodes the model once, in
-process, and reports that as untimed "offline" work; it then measures many evaluations against it.
-It is not cheaper — `MLInference_128` spends ~14.6 s of its 14.67 s wall time there, doing the same
-256-diagonal encoding — it simply amortizes it over many evaluations, which is the right shape for
-a throughput benchmark. The harness models a cold client→server round trip instead, so stage 7 is a
-fresh process every run and re-pays that setup each time.
-
-Measured split of HS setup at size 0 (same 4090, and at the 2^17 lifted parameters HS used then —
-the shape is what matters here, not the magnitudes):
-
-| | |
-| --- | ---: |
-| Rotation-key deserialization (174.8 M) | 0.27 s |
-| Weight read | 0.002 s |
-| **Diagonal encoding (`MatrixVectorEval` construction ×2)** | **8.44 s** |
-
-So it is encoding, not I/O. Those encoded diagonals depend only on the weights, the layer geometry
-and the level/scale — every one a compile-time constant — so for HS they are genuinely
-instance-independent, model-only artifacts, exactly what stage 3 exists for.
-
-**They now run there.** `MatrixVectorEvalEncoded` encodes the diagonals given only the gadget
-decomposition, with no rotation keys involved; `serial::save`/`load` carry the encoded plaintexts
-across the process boundary; and `MatrixVectorEval` gained a constructor that takes them and shares
-rather than re-encodes. Stage 3 therefore does the encoding once and stage 7 rebuilds the evaluator
-from it, which is what drops HS's stage-7 setup to ~0.12 s on the bench machine. Encoding is done
-on the device the evaluation will run on: the library does not guarantee that encoding on the CPU
-and moving to a GPU afterwards yields bit-identical plaintexts. PCMM was never affected — its setup
-is ~50 ms, because it has no rotation keys and no diagonals.
+Note that the harness's cost model is what makes this matter. It models a cold client→server round
+trip, so stage 7 is a fresh process on every run and re-pays its setup each time; a long-running
+server would pay it once and amortize it away.
 
 ### Against the reference OpenFHE submission
 
@@ -349,38 +311,79 @@ is ~50 ms, because it has no rotation keys and no diagonals.
 
 Before quoting any ratio:
 
-1. **HS is still preprocessing-bound at size 0**, the cost has only moved stages: 0.58 s scored
-   and 7.23 s of stage-3 encoding, against 0.99 ms of actual evaluation. For a single-shot,
-   cold-start latency comparison the honest number is the ~7.8 s of both stages together — not the
-   0.58 s scored figure, and certainly not 1 ms. The reference submission pays its equivalent work
-   inside `Encrypted computation`, so compare it against the two stages summed.
+1. **HS is still preprocessing-bound at size 0**, the cost has only moved stages: 0.41 s scored
+   and 2.15 s of stage-3 encoding, against 0.76 ms of actual evaluation. For a single-shot,
+   cold-start latency comparison the honest number is the ~2.6 s of both stages together — not the
+   0.41 s scored figure, and certainly not 0.76 ms. The reference submission pays its equivalent
+   work inside `Encrypted computation`, so compare it against the two stages summed.
 2. **Reference numbers are CPU; ours are GPU.** Not the same hardware.
 
 ---
 
 ## 5. Security
 
-**The ≥128-bit claim is not signed off for either scheme.**
+**The ≥128-bit claim is not signed off for either scheme.** The policy below is what the code
+enforces today and what a review would have to ratify or replace.
 
-The shared uniform-ternary (hw = 0) budget table is `maxBits128` in
-[`include/mlp_params.hpp`](include/mlp_params.hpp): entries for 2^13–2^15 from HEaven's
-`maxBitsPolicy128()`, 2^16–2^17 citing ePrint 2024/463, and a 2^12 entry added for PCMM. **These
-are provisional and the Hamming weight may change.**
+### The policy
 
-- **HS.** No lifting: sampled directly at 2^15, the ring it is used in, and CI halves the effective
-  dimension again (only half the coefficients are sampled) — effective dimension 2^14, budget
-  `maxBits128(14) = 430` bits, against a ~105-bit chain. An earlier configuration sampled at 2^15
-  and lifted to 2^17; that carried the same LWE problem and the same 430-bit budget, since lifting
-  adds no entropy, but required a review to accept the lifted-key construction itself. Dropping the
-  lifting removes that argument from the analysis without weakening any parameter — see
-  [§1](#scheme-a--halevishoup-size-0) for why it was worth doing on performance grounds too.
-- **PCMM.** Also no lifting: sampled directly at 2^13, so security rests on `maxBits128(12) = 106`
-  bits (CI → RLWE dimension 2^12) against a ~94-bit chain.
+Both schemes are instantiated under one rule, applied independently per scheme:
 
-Neither scheme now relies on a lifted key, so the two rest on the same kind of argument and differ
-only in dimension. What remains unreviewed is the `maxBits128` table itself at hw = 0.
+> For a secret sampled in a ring of degree N over the conjugate-invariant subring, the total
+> switching-key modulus `log2(P·Q)` must not exceed `maxBits128(log2(N) − 1)`, with a margin of 5
+> bits.
 
-Everything a review would change is confined to one block each in `mlp::` and `mlp::pcmm`.
+Three parts to it:
+
+1. **Uniform-ternary secrets, `hw = 0`.** Neither scheme uses a sparse key.
+2. **The effective dimension is one octave below the ring.** On the conjugate-invariant subring only
+   half the coefficients are sampled, so a secret drawn at 2^k carries the RLWE problem of 2^(k−1) —
+   and the budget is read at that index, never at the ring's own degree.
+3. **The budget bounds the key modulus, not the level chain.** What must fit is `P·Q` for the
+   largest switching key, which is the chain modulus at that key's level plus the temporary modulus
+   used to switch. The level chain alone is always comfortably smaller.
+
+Neither scheme lifts its secret key into a larger ring, so each rests on the dimension it actually
+samples at — there is no separate lifting argument to accept.
+
+### The budget table
+
+`maxBits128` in [`include/mlp_params.hpp`](include/mlp_params.hpp), keyed by RLWE dimension for
+`hw = 0`. It is the single point a review edits, shared by both schemes:
+
+| RLWE dimension | 2^12 | 2^13 | 2^14 | 2^15 | 2^16 | 2^17 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `maxBits128` | 106 | 214 | 430 | 868 | 1748 | 3523 |
+
+Entries for 2^13–2^15 come from the toolchain's own 128-bit policy; 2^16–2^17 cite ePrint 2024/463;
+2^12 was added for PCMM's ring. Any degree without an entry is rejected at key generation rather
+than defaulted — which is why the schemes cannot silently drop to an unbudgeted ring.
+
+### As instantiated
+
+| | HS (size 0) | PCMM (sizes 1–3) |
+| --- | --- | --- |
+| Ring N | 2^15 | 2^13 |
+| Effective RLWE dimension | 2^14 | 2^12 |
+| Secret | uniform ternary, `hw = 0`, σ = 3.2 | uniform ternary, `hw = 0`, σ = 3.2 |
+| **Budget `maxBits128`** | **430 bits** | **106 bits** |
+| Level chain | 30 + 3×25 ≈ 105 bits | 28 + 3×22 ≈ 94 bits |
+| Largest switching key (`P·Q`) | chain + temporary, well inside 430 | ~50-bit key modulus + temporary |
+| Margin | 5 bits | 5 bits |
+
+HS sits far inside its budget — the 2^15 ring buys 430 bits against a 105-bit chain. PCMM is the
+tighter of the two: its 106-bit budget is why its chain is 28 + 3×22 rather than HS's 30 + 3×25,
+and why its relinearization key is built after the rescale, at a single level, instead of across
+the whole chain. Both margins are enforced at key generation, which throws rather than silently
+producing an under-budget key.
+
+### What is still open
+
+The table itself, at `hw = 0`. The values are provisional, and the Hamming weight is a parameter a
+review may change — moving to a sparse key would alter noise growth and force the level schedule,
+accuracy and bottom-modulus headroom to be re-validated, so it is not a documentation edit.
+
+Everything a review would change is confined to one parameter block per scheme.
 
 ### Why the Zn-multiplication citation does not transfer
 
@@ -394,10 +397,11 @@ h ∈ {32, 64, 128, 192, 256, 512, 1024}. Both our schemes use `hw = 0`, i.e. a 
 (dense)** secret with h ≈ 2n/3, off the right edge of the table. There is no row to read.
 
 Our values sit near its densest column without matching it (our 2^13 entry 214 equals its `h=1024`
-exactly; 2^14 is 430 vs 426; 2^15 is 868 vs 854), consistent with their stated provenance in
-`maxBitsPolicy128()` rather than in this table. A dense key *is* at least as hard as an h=1024 one
-at the same (n, q), so reading off that column would be conservative — but that is an argument a
-reviewer accepts, not a citation, and the numeric drift shows they are different analyses.
+exactly; 2^14 is 430 vs 426; 2^15 is 868 vs 854), which is consistent with the two coming from
+different analyses rather than one being derived from the other. A dense key *is* at least as hard
+as an h=1024 one at the same (n, q), so reading off that column would be conservative — but that is
+an argument a reviewer accepts, not a citation, and the numeric drift shows they are not the same
+source.
 
 Two coherent ways to close it — a decision, not an oversight:
 
