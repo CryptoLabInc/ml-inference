@@ -6,8 +6,8 @@
 //
 // Stage 2.2: generate all key material at the client.
 //
-// Dispatches on instance size (mlp::usePcmm): single/small use the
-// Halevi-Shoup layer scheme below; medium/large use PCMM (mlp_pcmm.hpp).
+// Dispatches on instance size (mlp::usePcmm): single uses the Halevi-Shoup
+// layer scheme below; small/medium/large use PCMM (mlp_pcmm.hpp).
 // The two schemes need different key material -- HS wants rotation keys for
 // its two matvec layers plus a public encryption key; PCMM needs neither
 // rotation keys nor a public encryption key (its matrix encrypt is
@@ -34,7 +34,6 @@ namespace {
 void runHS(const InstanceParams &prms) {
     const Levels levels = buildLevels();
     const u32 top = levels.top();
-    const bool conj_inv = (NTT_ALG == NTTAlgorithm::CYC_FOR_CI);
 
     // ---- secret key: sampled low, lifted high ----
     SKGenerator skgen{SKGenParams{LOG_DEGREE, HW, NTT_ALG}};
@@ -59,28 +58,25 @@ void runHS(const InstanceParams &prms) {
     auto enc_key = enckeygen.genKey(*sk);
 
     // ---- switching keys ----
-    paramsUtils::SwKeyGenParamsBuilder swk;
-    swk.setNoiseDistribution(DiscreteGaussian(NOISE_STDDEV));
-    // The keys live in the full ring...
-    swk.setRing(LOG_DEGREE, POLY_TYPE);
-    // ...but the budget is that of the degree the key was actually sampled at.
-    swk.setModUpPrimes(swkMaxBits(), SWK_MARGIN);
-
+    // makeSwkParams() is shared with server_preprocess_model, which encodes the
+    // layer diagonals against the same gadget decomposition. Keep them going
+    // through that one function: if the two disagreed, the encoded diagonals
+    // would not bind to these keys.
     const u32 fc1_in = top - FC1_IN_DROP, fc1_out = top - FC1_OUT_DROP;
     const u32 fc2_in = top - FC2_IN_DROP;
 
-    SwKeyGenerator rot1_gen(swk.build(levels.mods[fc1_in], conj_inv));
+    SwKeyGenerator rot1_gen(makeSwkParams(levels, fc1_in));
     auto rot_keys_fc1 = rot1_gen.genRotKeys(
         *sk, MatrixVectorEval::rotKeyIndices(
                  makeMvParams(FC1, levels, fc1_in, levels.scales[fc1_in])));
 
-    SwKeyGenerator rot2_gen(swk.build(levels.mods[fc2_in], conj_inv));
+    SwKeyGenerator rot2_gen(makeSwkParams(levels, fc2_in));
     auto rot_keys_fc2 = rot2_gen.genRotKeys(
         *sk, MatrixVectorEval::rotKeyIndices(
                  makeMvParams(FC2, levels, fc2_in, levels.scales[fc2_in])));
 
     // Relinearization for the x^2, at the level the squaring happens on.
-    SwKeyGenerator relin_gen(swk.build(levels.mods[fc1_out], conj_inv));
+    SwKeyGenerator relin_gen(makeSwkParams(levels, fc1_out));
     auto relin_key = relin_gen.genRelinKey(*sk);
 
     // ---- serialize ----
@@ -127,6 +123,11 @@ void runPcmm(const InstanceParams &prms) {
 int main(int argc, char *argv[]) try {
     const auto size = parseInstanceSize(argc, argv);
     const InstanceParams prms(size);
+    // Stage 3 runs after this one but is given no arguments, so it cannot tell
+    // which scheme to prepare. Record the instance size on the way past -- see
+    // the instance-marker note in mlp_pipeline.hpp.
+    writeInstanceMarker(size);
+
     // Deliberately no targetDevice() here: key generation runs on the CPU. The
     // client is a separate party and need not own a GPU, and the keys are
     // serialized either way -- server_encrypted_compute is what loads them onto

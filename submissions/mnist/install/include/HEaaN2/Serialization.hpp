@@ -18,6 +18,7 @@
 #include "ISecretKey.hpp"
 #include "ISwKey.hpp"
 #include "KeyUtils.hpp"
+#include "MatrixVectorEval.hpp"
 #include "Message.hpp"
 
 #include "Device.hpp"
@@ -59,12 +60,16 @@ template <> HEAAN2_API void save(std::ostream &, const heaan::ISwKey &);
 template <> HEAAN2_API void save(std::ostream &, const heaan::RotKeyPtrs &);
 template <> HEAAN2_API void save(std::ostream &, const heaan::KeyPtrBundle &);
 template <> HEAAN2_API void save(std::ostream &, const heaan::BootKeyPtrs &);
+template <>
+HEAAN2_API void save(std::ostream &, const heaan::MatrixVectorEvalEncoded &);
 
 template <> HEAAN2_API heaan::Message load(std::istream &, const Device &);
 template <> HEAAN2_API heaan::Message128 load(std::istream &, const Device &);
 template <> HEAAN2_API heaan::RotKeyPtrs load(std::istream &, const Device &);
 template <> HEAAN2_API heaan::KeyPtrBundle load(std::istream &, const Device &);
 template <> HEAAN2_API heaan::BootKeyPtrs load(std::istream &, const Device &);
+template <>
+HEAAN2_API heaan::MatrixVectorEvalEncoded load(std::istream &, const Device &);
 template <>
 HEAAN2_API Ptr<heaan::IPlaintext> loadAsPtr(std::istream &, const Device &);
 template <>

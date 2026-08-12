@@ -24,7 +24,7 @@ accuracy 97.96%.
 Two circuits evaluate it, chosen by instance size alone (`mlp::usePcmm` in
 [`include/mlp_params.hpp`](include/mlp_params.hpp)) — same model, same weights, different packing.
 
-### Scheme A — Halevi–Shoup (sizes 0–1)
+### Scheme A — Halevi–Shoup (size 0)
 
 | | |
 | --- | --- |
@@ -56,7 +56,7 @@ noise growth — in log2(4) = 2 automorphisms. The divisibility is asserted at k
 getting it wrong throws nothing, it silently decrypts to noise. `frobMap` is supplied by the
 vendored HEaaN2 in [`install/`](install/).
 
-### Scheme B — PCMM (sizes 2–3)
+### Scheme B — PCMM (sizes 1–3)
 
 Feature = ciphertext **row** (the GEMM contraction dim), image = **column/slot** — the opposite
 convention from HS. Written against HEaaN2's public API (`HomEvalMatrix::pcmm`,
@@ -80,6 +80,14 @@ L0  +b2 (plaintext add, no level cost), decrypt
 One message holds 4096 images; larger batches split into further *blocks* inside a single
 `ICtMatrix`, transparently. `x²` runs tensor → rescale → relin (not the usual tensor → relin →
 rescale), so the relin key is built at the *post-rescale* level.
+
+**Why size 1 is here and not on HS.** `numBlocks` is 1 for every batch up to 4096, so 100 images
+and 1000 images do *identical* work — size 1 inherits size 2's cost outright rather than paying
+some smaller-batch penalty. Against HS at the same size that removes the rotation keys altogether
+(174.8 M → ~58 K of public key material) and the diagonal encoding with them, at equal accuracy.
+Size 0 stays on HS: it is the one instance that exercises the key-less fold and public-key
+encryption, both of which PCMM cannot offer (its matrix encrypt is necessarily symmetric-key —
+see [Encryption: public key vs symmetric key](#encryption-public-key-vs-symmetric-key)).
 
 **Bias fold.** `b1` rides as an extra column of `U1` (`128×485`) against an appended ones-row in the
 packed input, so fc1's pcmm computes `W1·X + b1` directly. `b2` is *not* folded that way — it would
@@ -107,6 +115,10 @@ secret key.** Both are purely client-side and the secret key never leaves `secke
 harness does not measure) — but it is a real asymmetry, disclosed here rather than left to be
 noticed.
 
+Moving size 1 onto PCMM widens it: public-key encryption is now exercised at size 0 alone. Keeping
+size 0 on HS is deliberate for that reason as much as for the key-less fold — it is what stops the
+submission from resting on the symmetric-key path everywhere.
+
 ### Stage split
 
 Every stage binary parses the size and dispatches; the harness contract (seven fixed names,
@@ -123,13 +135,28 @@ Every stage binary parses the size and dispatches; the harness contract (seven f
 | `client_postprocess` | argmax — cleartext, same output format both schemes | ← |
 
 `server_preprocess_model` is invoked **with no arguments**, so it cannot know the instance size or
-reach `io/<size>/public_keys`. HS's `MatrixVectorEval` encodes diagonals in its constructor, on the
-rotation keys' device and behind an interface that cannot hand the encoded state back; PCMM's
-`buildModel` encodes at batch-size-dependent shapes. Neither fits in stage 3, so both happen in
-stage 7 — which therefore reports *setup*, *warm-up* and *evaluation* separately in
-`server_reported_steps.json`. The reference submission has the same shape (its stage 3 is a no-op).
-HS's share of that setup is ~8.4 s of diagonal encoding that is genuinely model-only work; see
-[§4](#4-results) for why it cannot currently move to stage 3.
+reach `io/<size>/public_keys`. That constrains what each scheme can hoist into stage 3, and the two
+answers differ:
+
+- **HS encodes its diagonals in stage 3.** The diagonal geometry is fixed (`fc1` 128×512, `fc2`
+  128×128) and does not depend on the batch size — batch size only changes how many ciphertexts are
+  fed through — so stage 3 has everything it needs without knowing the instance. `MatrixVectorEval`
+  would normally encode inside its constructor, on the rotation keys' device, behind an interface
+  that cannot return the encoded state; `MatrixVectorEvalEncoded` performs that encoding separately
+  from any key material, taking only the gadget decomposition, and `serial::save`/`load` carry the
+  result across the process boundary. Stage 7 then rebuilds the evaluator from the encoded
+  diagonals, skipping what was the expensive half of its setup.
+- **PCMM still encodes in stage 7.** `buildModel` encodes at batch-size-dependent shapes, which
+  stage 3 cannot know. This costs it little: PCMM's setup is ~50 ms either way, because it has no
+  rotation keys to deserialize.
+
+Stage 7 reports *setup*, *warm-up* and *evaluation* separately in `server_reported_steps.json`. The
+reference submission leaves stage 3 a no-op and pays everything in stage 7.
+
+The harness times stage 3 as `Encrypted model preprocessing`, so this moves HS's ~7.3 s of diagonal
+encoding out of the scored `Encrypted computation` rather than eliminating it — it is genuinely
+model-only work, done once per model instead of once per input. [§4](#4-results) reports both
+figures side by side.
 
 **Warm-up.** Between setup and the timed evaluation, stage 7 runs one full inference pass and
 discards the result — the same discarded pass HEaaN2's own mlp benchmarks run. The first use of
@@ -208,60 +235,82 @@ so that check is a precondition for quoting any timing here.
 
 ### As shipped
 
-| | size 0 (1) HS | size 1 (100) HS | size 2 (1000) PCMM | size 3 (10000) PCMM |
+| | size 0 (1) HS | size 1 (100) PCMM | size 2 (1000) PCMM | size 3 (10000) PCMM |
 | --- | --- | --- | --- | --- |
-| harness `Encrypted computation` | 7.04 s | 6.94 s | **0.43 s** | **0.50 s** |
-| ├─ model setup | 6.75 s | 6.65 s | 0.048 s | 0.045 s |
-| ├─ warm-up (discarded) | 0.0055 s | 0.0055 s | 0.030 s | 0.028 s |
-| └─ evaluation | **1.01 ms** | **1.00 ms** | **0.91 ms** | **2.63 ms** |
-| Public + evaluation keys | 174.8 M | 174.8 M | **54.0 K** | **54.0 K** |
-| Encrypted input | 1.6 M | 1.6 M | 44.5 M | 133.6 M |
-| Encrypted results | 480 K | 480 K | 280 K | 840 K |
-| **Accuracy** | PASS | **0.980** | **0.989** | **0.980** |
-| Harness plaintext model | — | 0.960 | 0.981 | 0.978 |
+| harness `Encrypted model preprocessing` | 7.23 s | — | **0.068 s** | **0.071 s** |
+| harness `Encrypted computation` | 0.58 s | — | **0.44 s** | **0.56 s** |
+| ├─ model setup | 0.280 s | — | 0.051 s | 0.050 s |
+| ├─ warm-up (discarded) | 0.022 s | — | 0.032 s | 0.033 s |
+| └─ evaluation | **0.99 ms** | — | **0.91 ms** | **2.63 ms** |
+| Public + evaluation keys | 174.8 M | — | **54.0 K** | **54.0 K** |
+| Encrypted input | 1.6 M | — | 44.5 M | 133.6 M |
+| Encrypted results | 480 K | — | 280 K | 840 K |
+| **Accuracy** | PASS | — | **0.989** | **0.979** |
+| Harness plaintext model | — | — | 0.981 | 0.978 |
 
-The three sub-rows do not sum to the scored figure: the harness times the whole stage-7 *process*,
-so it also carries ~0.25–0.35 s of interpreter and CUDA-context startup and ciphertext I/O that
-sits outside the submission's own timers.
+> **Size 1 awaits re-measurement.** It moved from HS to PCMM after this table was taken, so its
+> former column described a circuit it no longer runs and has been cleared rather than carried
+> over. Because `numBlocks` is 1 at both 100 and 1000 images, it is expected to land on size 2's
+> figures; that is a prediction, not a measurement, and the column stays empty until the bench
+> machine fills it.
 
-Accuracy varies slightly run to run from encryption noise (size 2 measured 0.988–0.990, size 3
-0.9796–0.9798 across runs); the table rounds. The harness plaintext row is the harness's own model
-on the same subset, reported for reference — the encrypted model scores at or above it at every
-size.
+**Read the two harness rows together.** HS's diagonal encoding runs in stage 3
+([§1](#stage-split)), so at size 0 the scored `Encrypted computation` is 0.58 s while the ~7.3 s
+of encoding it depends on is reported as `Encrypted model preprocessing`. The work moved out of the
+scored stage; it did not get cheaper. What makes the move legitimate rather than accounting is that
+the encoding depends only on the weights — it is paid once per model, whereas stage 7 is paid once
+per input batch. Quoting the 0.58 s alone, without the 7.23 s beside it, would misrepresent
+single-shot latency.
 
-### Why PCMM at medium/large — a controlled A/B
+The stage-7 sub-rows do not sum to the scored figure: the harness times the whole stage-7 *process*,
+so it also carries ~0.25 s of interpreter and CUDA-context startup and ciphertext I/O that sits
+outside the submission's own timers.
+
+Accuracy varies slightly run to run from encryption noise (size 3 measured 0.9793–0.9798 across
+runs); the table rounds. The harness plaintext row is the harness's own model on the same subset,
+reported for reference — the encrypted model scores at or above it at every size.
+
+### Why PCMM at sizes 1–3 — a controlled A/B
 
 Both schemes, same instances, same machine, same session, same sm_120 library (HS forced at sizes
 2–3 by overriding `usePcmm`):
 
-| | HS setup | HS eval | HS scored | PCMM setup | PCMM eval | PCMM scored |
+| | HS stage 3 | HS eval | HS scored | PCMM stage 3 | PCMM eval | PCMM scored |
 | --- | --- | --- | --- | --- | --- | --- |
-| size 2 (1000) | 6.93 s | 7.77 ms | 7.25 s | 0.048 s | **0.91 ms** | **0.43 s** |
-| size 3 (10000) | 6.66 s | 76.8 ms | 7.13 s | 0.045 s | **2.63 ms** | **0.50 s** |
+| size 2 (1000) | 7.36 s | 7.72 ms | 0.64 s | **0.068 s** | **0.91 ms** | **0.44 s** |
+| size 3 (10000) | 7.36 s | 75.3 ms | 0.85 s | **0.071 s** | **2.63 ms** | **0.56 s** |
 
-**PCMM wins on both setup and arithmetic at these sizes.** On setup it needs no rotation keys at
-all (54 K of key material against HS's 174.8 M), so it skips the ~6.7 s of key deserialization and
-diagonal encoding HS re-pays *every run* — about 145× less setup. On evaluation it is 8.5× faster
-at 1000 images and 29× faster at 10000. Since the harness times the whole stage-7 process, the
-scored figure combines the two and PCMM lands 14–17× ahead.
+**PCMM wins on preprocessing and arithmetic; the two are close on the scored stage.** HS needs
+174.8 M of rotation keys and ~7.3 s of diagonal encoding, against PCMM's 54 K and ~70 ms — roughly
+105× less stage-3 preprocessing. On evaluation PCMM is 8.5× faster at 1000 images and 29× faster at
+10000, the gap widening with batch size for the reason below.
+
+On the scored `Encrypted computation` the margin is now only ~1.5×, because moving HS's encoding
+into stage 3 took most of its cost out of the timed stage. **The split is therefore justified by
+stage 3 and by evaluation, not by the scored figure alone** — and by key material, which is a
+property of the scheme rather than of where the work is timed.
 
 The evaluation gap widens with batch size because the two scale differently: HS packs a fixed 128
 images per ciphertext, so 1000 images need 8 ciphertexts and 10000 need 79, and its cost tracks
-that count almost exactly (7.77 ms → 76.8 ms, ~10× for 10× the images). PCMM's GEMM amortizes over
+that count almost exactly (7.72 ms → 75.3 ms, ~10× for 10× the images). PCMM's GEMM amortizes over
 the batch instead (0.91 ms → 2.63 ms, 2.9× for the same 10×). This is why the split is on instance
 size rather than a tuning constant.
 
 Two honest qualifications:
 
-- **This A/B justifies PCMM at sizes 2–3; it does not locate the crossover.** It forces HS at the
-  sizes PCMM ships at, not the reverse, so it says nothing about how PCMM would fare at 1 or 100
-  images — where HS's single-ciphertext packing is expected to win, and where the split leaves it
-  in place. Establishing the exact crossover point would need the mirrored experiment.
-- **These figures supersede a pre-warm-up, pre-synchronization draft of this table, and reverse its
-  conclusion on arithmetic.** That draft's stage-7 timers closed before the GPU had finished, which
-  under-reported PCMM by roughly 4.7× and made HS look faster at size 2. Its setup figures were
-  also materially lower than this machine measures (~4.4 s against ~6.9 s for HS). Only the
-  submission's self-reported breakdown was ever affected by the timer bug — the harness's own
+- **The crossover turned out to be below 100 images, not above it.** This A/B forces HS at the
+  sizes PCMM ships at, not the reverse, so it could not locate the crossover; an earlier draft
+  predicted from that gap that HS's single-ciphertext packing would win at 1 and 100 images. The
+  mirrored experiment has since been run at 100 images (sm_89 development box, not this table's
+  machine) and contradicted the prediction: PCMM reproduced size 2's cost outright, because
+  `numBlocks` is 1 for any batch up to 4096, at equal accuracy and ~58 K of key material against
+  HS's 174.8 M. Size 1 therefore ships on PCMM. Size 0 stays on HS for public-key encryption and
+  the key-less fold rather than for speed — it is one block under PCMM too, so PCMM would likely
+  win the timing there as well.
+- **Earlier drafts of this table reported the opposite on arithmetic.** Their stage-7 timers closed
+  before the GPU had finished, under-reporting PCMM by roughly 4.7× and making HS look faster at
+  size 2. The timers now synchronize and the evaluation is warm, which reverses that conclusion.
+  Only the submission's self-reported breakdown was ever affected — the harness's own
   `Encrypted computation` was honest throughout.
 - **PCMM's encrypted input is larger**, not smaller (44.5 M vs 13.1 M at size 2; 133.6 M vs 129.6 M
   at size 3, where the gap nearly closes). It wins on compute and key material, and loses on upload
@@ -300,10 +349,16 @@ Measured split of HS setup at size 0 (same 4090):
 
 So it is encoding, not I/O. Those encoded diagonals depend only on the weights, the layer geometry
 and the level/scale — every one a compile-time constant — so for HS they are genuinely
-instance-independent, model-only artifacts, exactly what stage 3 exists for. They stay in stage 7
-today only because `MatrixVectorEval` encodes inside its constructor and exposes no way to carry
-the encoded state across a process boundary (no constructor from pre-encoded diagonals, no
-serialization). PCMM is unaffected: its setup is 0.12 s.
+instance-independent, model-only artifacts, exactly what stage 3 exists for.
+
+**They now run there.** `MatrixVectorEvalEncoded` encodes the diagonals given only the gadget
+decomposition, with no rotation keys involved; `serial::save`/`load` carry the encoded plaintexts
+across the process boundary; and `MatrixVectorEval` gained a constructor that takes them and shares
+rather than re-encodes. Stage 3 therefore does the encoding once and stage 7 rebuilds the evaluator
+from it, which is what drops HS's stage-7 setup to ~0.28 s on the bench machine. Encoding is done
+on the device the evaluation will run on: the library does not guarantee that encoding on the CPU
+and moving to a GPU afterwards yields bit-identical plaintexts. PCMM was never affected — its setup
+is ~50 ms, because it has no rotation keys and no diagonals.
 
 ### Against the reference OpenFHE submission
 
@@ -315,8 +370,11 @@ serialization). PCMM is unaffected: its setup is 0.12 s.
 
 Before quoting any ratio:
 
-1. **Setup dominates HS**, so sizes 0–1 are setup-bound: 7.04 s scored against 1.01 ms of actual
-   evaluation. For single-shot latency, 7.04 s is the honest number — not 1 ms.
+1. **HS is still preprocessing-bound at size 0**, the cost has only moved stages: 0.58 s scored
+   and 7.23 s of stage-3 encoding, against 0.99 ms of actual evaluation. For a single-shot,
+   cold-start latency comparison the honest number is the ~7.8 s of both stages together — not the
+   0.58 s scored figure, and certainly not 1 ms. The reference submission pays its equivalent work
+   inside `Encrypted computation`, so compare it against the two stages summed.
 2. **Reference numbers are CPU; ours are GPU.** Not the same hardware.
 
 ---

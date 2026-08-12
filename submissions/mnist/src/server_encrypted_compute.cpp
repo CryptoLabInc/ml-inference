@@ -7,9 +7,9 @@
 // Stage 7: the encrypted inference. Everything the model computes happens
 // here, on ciphertext. Dispatches on instance size (mlp::usePcmm):
 //
-//   HS (single/small):  fc1 matvec -> fold -> +b1 -> x^2 -> rescale ->
-//                        fc2 matvec -> +b2
-//   PCMM (medium/large): fc1 pcmm+b1 -> x^2 -> rescale -> fc2 pcmm -> +b2
+//   HS (single):               fc1 matvec -> fold -> +b1 -> x^2 -> rescale ->
+//                               fc2 matvec -> +b2
+//   PCMM (small/medium/large): fc1 pcmm+b1 -> x^2 -> rescale -> fc2 pcmm -> +b2
 //
 // The server holds no secret key in either scheme. It loads the evaluation
 // keys the client published and the cleartext model it owns.
@@ -68,7 +68,7 @@ private:
     std::chrono::high_resolution_clock::time_point beg_;
 };
 
-constexpr const char *CACHE_DIR = "submissions/mnist/build/model_cache";
+constexpr const char *CACHE_DIR = MODEL_CACHE_DIR;
 
 // One full discarded inference pass before the timed evaluation, the same
 // warm-up HEaaN2's own mlp benchmarks run: the first use of each CUDA kernel
@@ -109,10 +109,18 @@ StageTimes runHS(const InstanceParams &prms, Device dev) {
     const auto w1 = readLayerWeights(FC1, std::string(CACHE_DIR) + "/fc1.bin");
     const auto w2 = readLayerWeights(FC2, std::string(CACHE_DIR) + "/fc2.bin");
 
-    const Layer fc1 = makeLayer(FC1, w1, levels, fc1_in, fc1_out, encoder,
-                                std::move(rot_fc1), std::move(relin_key), dev);
-    const Layer fc2 = makeLayer(FC2, w2, levels, fc2_in, fc2_out, encoder,
-                                std::move(rot_fc2), KeyPtr{}, dev);
+    // The diagonals were encoded by server_preprocess_model (stage 3), which
+    // needs no keys to do it; this stage only binds the rotation keys to them.
+    const auto enc1 = serial::load<MatrixVectorEvalEncoded>(
+        std::string(CACHE_DIR) + "/fc1_diags.bin", dev);
+    const auto enc2 = serial::load<MatrixVectorEvalEncoded>(
+        std::string(CACHE_DIR) + "/fc2_diags.bin", dev);
+
+    const Layer fc1 = makeLayer(FC1, w1.b, enc1, levels, fc1_in, fc1_out,
+                                encoder, std::move(rot_fc1),
+                                std::move(relin_key), dev);
+    const Layer fc2 = makeLayer(FC2, w2.b, enc2, levels, fc2_in, fc2_out,
+                                encoder, std::move(rot_fc2), KeyPtr{}, dev);
 
     StageTimes tm;
     tm.setup_s = t_setup.seconds();

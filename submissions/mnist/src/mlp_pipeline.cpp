@@ -48,6 +48,16 @@ MatrixVectorEvalParams makeMvParams(const LayerGeom &geom, const Levels &levels,
     return p;
 }
 
+SwKeyGenParams makeSwkParams(const Levels &levels, u32 level) {
+    paramsUtils::SwKeyGenParamsBuilder swk;
+    swk.setNoiseDistribution(DiscreteGaussian(NOISE_STDDEV));
+    // The keys live in the full ring...
+    swk.setRing(LOG_DEGREE, POLY_TYPE);
+    // ...but the budget is that of the degree the key was actually sampled at.
+    swk.setModUpPrimes(swkMaxBits(), SWK_MARGIN);
+    return swk.build(levels.mods[level], NTT_ALG == NTTAlgorithm::CYC_FOR_CI);
+}
+
 //===========================================================================
 // Model I/O
 //===========================================================================
@@ -216,9 +226,25 @@ Message buildBiasMessage(const LayerGeom &geom, const std::vector<double> &b) {
 // Layer assembly and evaluation
 //===========================================================================
 
-Layer makeLayer(const LayerGeom &geom, const LayerWeights &lw,
-                const Levels &levels, u32 in_level, u32 out_level,
-                const EnDecoder &encoder,
+MatrixVectorEvalEncoded encodeDiags(const LayerGeom &geom,
+                                    const std::vector<double> &W,
+                                    const Levels &levels, u32 in_level,
+                                    Device dev) {
+    const auto mv_params =
+        makeMvParams(geom, levels, in_level, levels.scales[in_level]);
+    // The gadget decomposition is why encoding needs the switching-key params
+    // at all: the baby-step rotations are hoisted, so the diagonals are
+    // multiplied in before the mod-down and therefore encoded in the
+    // key-switching modulus rather than the ciphertext's. It carries no key
+    // material -- makeSwkParams() generates nothing.
+    const auto gadget = makeSwkParams(levels, in_level).getGadgetDecomp();
+    const auto diags = buildDiags(geom, W);
+    return MatrixVectorEvalEncoded(mv_params, gadget, diags, dev);
+}
+
+Layer makeLayer(const LayerGeom &geom, const std::vector<double> &bias,
+                const MatrixVectorEvalEncoded &encoded, const Levels &levels,
+                u32 in_level, u32 out_level, const EnDecoder &encoder,
                 std::unique_ptr<RotKeyPtrs> rot_keys, KeyPtr relin_key,
                 Device dev) {
     if (out_level >= in_level)
@@ -231,11 +257,11 @@ Layer makeLayer(const LayerGeom &geom, const LayerWeights &lw,
 
     const auto mv_params =
         makeMvParams(geom, levels, in_level, levels.scales[in_level]);
-    auto diags = buildDiags(geom, lw.W);
 
     lyr.rot_keys = std::move(rot_keys);
+    // Binds the keys to the already-encoded diagonals -- no encoding here.
     lyr.matvec = std::make_unique<MatrixVectorEval>(mv_params, *lyr.rot_keys,
-                                                    diags);
+                                                    encoded);
 
     // Fold: sum the q/p cosets {0, s, 2s, ...}. The key-less path is valid
     // exactly when the stride is a multiple of the lifted key's invariance
@@ -259,7 +285,7 @@ Layer makeLayer(const LayerGeom &geom, const LayerWeights &lw,
     if (geom.activate && !lyr.relin_key)
         throw std::runtime_error("activating layer needs a relinearization key");
 
-    auto bias_msg = buildBiasMessage(geom, lw.b);
+    auto bias_msg = buildBiasMessage(geom, bias);
     bias_msg.to(dev);
     lyr.bias = IPlaintext::make(PtxtType::NORMAL);
     encoder.encode(bias_msg, *lyr.bias, lyr.mod_to, lyr.scale_to);
@@ -307,6 +333,34 @@ void homLayer(Ptr<ICiphertext> &ct, const Layer &lyr, const HomEval &eval,
     } else {
         ct = std::move(res);
     }
+}
+
+//===========================================================================
+// Instance marker
+//===========================================================================
+
+namespace {
+std::string markerPath() {
+    return std::string(MODEL_CACHE_DIR) + "/instance.txt";
+}
+} // namespace
+
+void writeInstanceMarker(InstanceSize size) {
+    fs::create_directories(MODEL_CACHE_DIR);
+    std::ofstream f(markerPath());
+    if (!f.good())
+        throw std::runtime_error("cannot write " + markerPath());
+    f << static_cast<int>(size) << "\n";
+    if (!f)
+        throw std::runtime_error("short write to " + markerPath());
+}
+
+std::optional<InstanceSize> readInstanceMarker() {
+    std::ifstream f(markerPath());
+    int v = -1;
+    if (!f.good() || !(f >> v) || v < 0 || v > static_cast<int>(InstanceSize::LARGE))
+        return std::nullopt;
+    return static_cast<InstanceSize>(v);
 }
 
 //===========================================================================
