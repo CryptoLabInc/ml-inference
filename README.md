@@ -25,18 +25,24 @@ Measured on **1× NVIDIA RTX 5090 (sm_120)**, seed 3, through the unmodified har
 | | size 0 (single, 1) | size 1 (small, 100) | size 2 (medium, 1000) | size 3 (large, 10000) |
 | --- | ---: | ---: | ---: | ---: |
 | Circuit | Halevi–Shoup | Halevi–Shoup | PCMM | PCMM |
-| Encrypted computation | 7.04 s | 6.94 s | **0.43 s** | **0.50 s** |
-| Total latency | 14.56 s | 15.73 s | 9.68 s | 15.91 s |
+| Encrypted model preprocessing | 7.23 s | 7.50 s | 0.07 s | 0.07 s |
+| Encrypted computation | **0.58 s** | **0.58 s** | **0.44 s** | **0.56 s** |
+| Total latency | 14.90 s | 16.67 s | 9.62 s | 16.30 s |
 | Public + evaluation keys | 174.8 M | 174.8 M | 54.0 K | 54.0 K |
 | Encrypted input | 1.6 M | 1.6 M | 44.5 M | 133.6 M |
 | Encrypted results | 480 K | 480 K | 280 K | 840 K |
-| Accuracy | PASS | 0.980 | 0.989 | 0.980 |
+| Accuracy | PASS | 0.980 | 0.989 | 0.979 |
 
-*(Every cell is the mean of the three committed runs. Accuracy varies in the third decimal across
-runs from encryption noise. `Encrypted computation` is the harness's stage-7 figure, which times
-the whole process: at sizes 0–1 it is almost entirely one-off key deserialization and diagonal
-encoding — the warm evaluation itself is ~1 ms. See
-[DESIGN.md §4](submissions/mnist/DESIGN.md#4-results) for the breakdown.)*
+*(`Encrypted computation` and `Total latency` are means of the three committed runs; model
+preprocessing and key generation are measured once per size. Accuracy varies in the third decimal
+across runs from encryption noise.)*
+
+*At sizes 0–1 the Halevi–Shoup circuit's diagonal encoding runs in stage 3 (`Encrypted model
+preprocessing`), not inside the timed stage 7: it depends only on the weights, never on the input.
+That is why `Encrypted computation` is ~0.57 s rather than the ~7 s it would otherwise be — the
+work moved out of the scored stage rather than disappearing, and total latency is essentially
+unchanged. The warm evaluation inside stage 7 is ~1 ms at every size. See
+[DESIGN.md §4](submissions/mnist/DESIGN.md#4-results) for the full breakdown.*
 
 ## License
 

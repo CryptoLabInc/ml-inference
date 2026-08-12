@@ -12,6 +12,7 @@
 #pragma once
 
 #include "HEaaN2/Encoding.hpp"
+#include "HEaaN2/GadgetDecomp.hpp"
 #include "HEaaN2/ICiphertext.hpp"
 #include "HEaaN2/KeyUtils.hpp"
 #include "HEaaN2/Levels.hpp"
@@ -75,6 +76,65 @@ struct HEAAN2_API MatrixVectorEvalParams {
     void checkValidity() const;
 };
 
+/// @brief The encoded diagonals of a MatrixVectorEval, without any key
+/// material.
+/// @details The encoding depends on the MatrixVectorEvalParams, the diagonals
+/// and the GadgetDecomp of the rotation keys the evaluation will use -- but on
+/// no key material, so a party holding the model and the public parameters can
+/// build, serialize and reload this without ever seeing an evaluation key. Pass
+/// it to the corresponding MatrixVectorEval constructor to bind the keys.
+/// @details The GadgetDecomp enters because the baby-step rotations are
+/// hoisted: the diagonals are multiplied in before the mod-down, so they are
+/// encoded in the key-switching modulus rather than in the modulus of the
+/// ciphertext.
+class HEAAN2_API MatrixVectorEvalEncoded {
+public:
+    /// @brief Constructs an empty MatrixVectorEvalEncoded.
+    /// @details Only useful as the target of serial::load.
+    MatrixVectorEvalEncoded();
+
+    /// @brief Encodes the diagonals of the matrix given by @p diags.
+    /// @param params The MatrixVectorEval parameters.
+    /// @param gadget_decomp The gadget decomposition of the rotation keys the
+    /// evaluation will use, as returned by RotKeyPtrs::gadgetDecomp().
+    /// @param diags The diagonals of the matrix, keyed by their offset.
+    /// @param device The device to encode on.
+    /// @details The diagonals must be on the CPU; the encoded result is built
+    /// on @p device. Encoding on the CPU and moving to a GPU afterwards is not
+    /// guaranteed to give bit-identical plaintexts, so encode on the device the
+    /// evaluation will run on.
+    /// @throws if diags is empty, holds a diagonal that no (giant step, baby
+    /// step) pair reaches, or leaves a giant step without any diagonal.
+    MatrixVectorEvalEncoded(const MatrixVectorEvalParams &params,
+                            const GadgetDecomp &gadget_decomp,
+                            const std::map<i32, Message> &diags,
+                            Device device = Device::CPU);
+
+    /// @brief Checks if the object holds no encoded diagonals.
+    /// @return true if it is empty, false otherwise.
+    bool isEmpty() const;
+
+    /// @brief Gets the number of encoded diagonals.
+    /// @return The number of encoded diagonals.
+    size_t numDiags() const;
+
+    /// @brief Gets the device the diagonals are encoded on.
+    /// @return The device of the encoded diagonals.
+    /// @throws if the object is empty.
+    Device device() const;
+
+    /// @brief Moves the encoded diagonals to the specified device.
+    /// @param device Device where the diagonals are moved to.
+    /// @details This moves the already-encoded plaintexts; it does not
+    /// re-encode them.
+    /// @throws if the object is empty, or if a MatrixVectorEval built from it
+    /// is still alive -- that evaluator shares these plaintexts and expects
+    /// them to stay on the device it was constructed for.
+    void to(Device device);
+
+    Pimpl impl;
+};
+
 /// @brief A class evaluating a matrix-vector product on ciphertexts
 /// @details With n slots and the diagonal of offset d given as diags[d], the
 /// evaluated map is res[i] = sum_d diags[d][i] * op[(i + d) % n]. The
@@ -101,6 +161,22 @@ public:
     MatrixVectorEval(const MatrixVectorEvalParams &params,
                      const RotKeyPtrs &rot_keys,
                      const std::map<i32, Message> &diags);
+
+    /// @brief Constructs a MatrixVectorEval from already-encoded diagonals.
+    /// @param params The MatrixVectorEval parameters.
+    /// @param rot_keys The rotation keys for the evaluation, which must
+    /// contain a key for every step of rotKeyIndices(params) and must outlive
+    /// this object.
+    /// @param encoded The encoded diagonals, which are shared with -- not
+    /// copied from -- @p encoded, so it may be destroyed afterwards.
+    /// @details This skips the encoding, which is the expensive half of the
+    /// three-argument constructor.
+    /// @throws if encoded is empty, if it was built for different params or
+    /// for a different gadget decomposition, if its device does not match the
+    /// one of rot_keys, or if a rotation key is missing.
+    MatrixVectorEval(const MatrixVectorEvalParams &params,
+                     const RotKeyPtrs &rot_keys,
+                     const MatrixVectorEvalEncoded &encoded);
 
     /// @brief Evaluates the matrix-vector product.
     /// @param[in] op The ciphertext holding the vector in its slots.

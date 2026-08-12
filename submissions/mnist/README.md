@@ -12,7 +12,7 @@ OpenFHE/HEIR submission in this directory. The harness is unmodified.
 | | |
 | --- | --- |
 | Model | 2-layer MLP, `fc1(128×484) → x² → fc2(10×128)`, BN folded. Plaintext accuracy 97.96% |
-| Accuracy | 0.980 / 0.989 / 0.980 at sizes 1 / 2 / 3, against the harness model's 0.960 / 0.981 / 0.978 |
+| Accuracy | 0.980 / 0.989 / 0.979 at sizes 1 / 2 / 3, against the harness model's 0.960 / 0.981 / 0.978 |
 | Scheme | CKKS on the conjugate-invariant subring, no bootstrapping |
 | Hardware | **NVIDIA sm_120 (Blackwell) GPU required** — the vendored HEaaN2 binary targets sm_120 only, with no PTX fallback. [Check first](BUILDING.md#-this-submission-requires-an-sm_120-gpu) |
 
@@ -22,7 +22,7 @@ packing:
 | Size | Scheme | Why |
 | --- | --- | --- |
 | 0–1 (1, 100 images) | **Halevi–Shoup** rotation-folded matvec | faster arithmetic at small batches |
-| 2–3 (1000, 10000) | **PCMM** (GEMM-based) | needs no rotation keys, so ~145× less setup — and it is faster to evaluate at these batch sizes too, for ~15× less total stage-7 cost, which is what the harness scores |
+| 2–3 (1000, 10000) | **PCMM** (GEMM-based) | needs no rotation keys and no diagonal encoding, so ~105× less model preprocessing (~70 ms against HS's ~7.3 s), and 8.5–29× faster evaluation at these batch sizes |
 
 Every stage binary dispatches internally, so the harness contract (seven fixed executable names,
 `<size>` as the only argument) is unchanged.
