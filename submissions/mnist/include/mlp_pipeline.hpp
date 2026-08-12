@@ -130,12 +130,16 @@ heaan::MatrixVectorEvalEncoded encodeDiags(const LayerGeom &geom,
 // diagonals. `rot_keys` is consumed; `encoded` is shared, not copied, so it may
 // be destroyed afterwards. Only the bias is encoded here -- one message per
 // layer, which is negligible next to the diagonals.
+// `fold_keys` is consumed too, and is required exactly when the layer folds
+// (q/p > 1) and the key-less path is unavailable -- i.e. whenever the secret
+// key is not lifted. Pass an empty RotKeyPtrs for a layer that does not fold.
 Layer makeLayer(const LayerGeom &geom, const std::vector<double> &bias,
                 const heaan::MatrixVectorEvalEncoded &encoded,
                 const heaan::Levels &levels, u32 in_level, u32 out_level,
                 const heaan::EnDecoder &encoder,
                 std::unique_ptr<heaan::RotKeyPtrs> rot_keys,
-                heaan::KeyPtr relin_key, heaan::Device dev);
+                heaan::KeyPtr relin_key, heaan::Device dev,
+                heaan::RotKeyPtrs fold_keys = {});
 
 // Online evaluation: ciphertext operations only. `ct` is replaced.
 void homLayer(heaan::Ptr<heaan::ICiphertext> &ct, const Layer &lyr,

@@ -28,9 +28,9 @@ Two circuits evaluate it, chosen by instance size alone (`mlp::usePcmm` in
 
 | | |
 | --- | --- |
-| Ring | N = 2^17, CI subring (ePrint 2018/952), `GRAFTED`, 65536 slots |
+| Ring | N = 2^15, CI subring (ePrint 2018/952), `GRAFTED`, 16384 slots |
 | Modulus chain | 30 + 3×25 ≈ 105 bits, 4 levels, no bootstrapping |
-| Secret key | uniform ternary (hw = 0), sampled at 2^15, **lifted** to 2^17 |
+| Secret key | uniform ternary (hw = 0), sampled directly at 2^15 |
 | Noise / SWK budget | σ = 3.2 / `maxBits128(14) = 430` bits, margin 5.0 |
 
 ```
@@ -40,28 +40,18 @@ L1  fc2 matvec                        → L0, +b2, decrypt
 ```
 
 **Packing.** One image occupies 512 padded coordinates; coordinate `c` of image `i` sits in slot
-`c*128 + i` — **128 images per ciphertext**, so a batch of `n` needs `ceil(n/128)` ciphertexts, not
-`n`. The harness only measures the byte size of `ciphertexts_upload/`, so the layout is a free
-choice.
+`c*32 + i` — **32 images per ciphertext**, so a batch of `n` needs `ceil(n/32)` ciphertexts, not
+`n`. Only size 0 runs this scheme, so one ciphertext is all it ever builds. The harness only
+measures the byte size of `ciphertexts_upload/`, so the layout is a free choice.
 
-`fc1` is rectangular 128×512 and folds 4:1. `fc2` is deliberately *squared* to 128×128 rather than
-the natural 16×128: its fold stride would miss the key-less fold's invariance period, and a keyed
-fold costs a mod-down per coset — squared, the cosets instead ride the matvec's giant steps, which
-double-hoisted BSGS accumulates behind a single mod-down.
-
-**The key-less fold.** A key lifted from 2^15 is invariant under exactly those rotations whose step
-is a multiple of 2^14, and fc1's fold stride (128 × 128 = 16384) is one. Its fold therefore runs as
-bare Galois automorphisms (`HomEval::frobMap`) — no rotation keys, no level, no scale change, no
-noise growth — in log2(4) = 2 automorphisms. The divisibility is asserted at key generation:
-getting it wrong throws nothing, it silently decrypts to noise. `frobMap` is supplied by the
-vendored HEaaN2 in [`install/`](install/).
+`fc1` is rectangular 128×512 and folds 4:1, with keys. `fc2` is deliberately *squared* to 128×128
+rather than the natural 16×128, making `q/p == 1` so it needs no fold at all: its cosets ride the
+matvec's giant steps instead, which double-hoisted BSGS accumulates behind a single mod-down.
 
 ### Scheme B — PCMM (sizes 1–3)
 
 Feature = ciphertext **row** (the GEMM contraction dim), image = **column/slot** — the opposite
-convention from HS. Written against HEaaN2's public API (`HomEvalMatrix::pcmm`,
-`ICtMatrix`/`IPtMatrix`, `Matrix<Real>`); HEaaN2's own `mlp/PCMM` benchmark was read as a design
-reference for the algorithm, but [`src/mlp_pcmm.cpp`](src/mlp_pcmm.cpp) is our own code.
+convention from HS. Written against HEaaN2's public API.
 
 | | |
 | --- | --- |
@@ -81,30 +71,11 @@ One message holds 4096 images; larger batches split into further *blocks* inside
 `ICtMatrix`, transparently. `x²` runs tensor → rescale → relin (not the usual tensor → relin →
 rescale), so the relin key is built at the *post-rescale* level.
 
-**Why size 1 is here and not on HS.** `numBlocks` is 1 for every batch up to 4096, so 100 images
-and 1000 images do *identical* work — size 1 inherits size 2's cost outright rather than paying
-some smaller-batch penalty. Against HS at the same size that removes the rotation keys altogether
-(174.8 M → ~58 K of public key material) and the diagonal encoding with them, at equal accuracy.
-Size 0 stays on HS: it is the one instance that exercises the key-less fold and public-key
-encryption, both of which PCMM cannot offer (its matrix encrypt is necessarily symmetric-key —
-see [Encryption: public key vs symmetric key](#encryption-public-key-vs-symmetric-key)).
-
 **Bias fold.** `b1` rides as an extra column of `U1` (`128×485`) against an appended ones-row in the
 packed input, so fc1's pcmm computes `W1·X + b1` directly. `b2` is *not* folded that way — it would
 carry the ones-row through `x²` and `fc2`, taking the contraction from 128 to 129 rows for one bias
 vector — so it is added afterwards as a plaintext delta (its inverse DFT is one nonzero coefficient
 per block, which a zero-filled matrix already provides).
-
-**Coefficient/slot relabeling** (ePrint 2024/1284 §6.3). `pcmm` wants weights coefficient-encoded
-(literal GEMM scalars) but data slot-encoded (so the library's iDFT applies on encrypt). Both are
-bit-for-bit the same array — `M' = MF`, and pcmm commutes with the per-row DFT — so the input is
-encrypted once through the slot encoder and its DFT flag flipped in place via
-`HomEvalFlexible::setDFT`, bridged through a `BatchRLWE` ciphertext (`ICtMatrix` exposes no
-`setDFT`).
-
-**Serialization.** `heaan::serial` has no `ICtMatrix` overload, so it crosses `io/` bridged through
-a `BatchRLWE` `ICiphertext`, which *is* serializable. Shape is never stored in the file — both ends
-recompute it from the batch size and the constants above, so writer and reader cannot drift.
 
 ### Encryption: public key vs symmetric key
 
@@ -116,22 +87,22 @@ harness does not measure) — but it is a real asymmetry, disclosed here rather 
 noticed.
 
 Moving size 1 onto PCMM widens it: public-key encryption is now exercised at size 0 alone. Keeping
-size 0 on HS is deliberate for that reason as much as for the key-less fold — it is what stops the
-submission from resting on the symmetric-key path everywhere.
+size 0 on HS is deliberate for that reason — it is what stops the submission from resting on the
+symmetric-key path everywhere.
 
 ### Stage split
 
 Every stage binary parses the size and dispatches; the harness contract (seven fixed names,
 `<size>` as the only argument) is unchanged.
 
-| Stage | HS (0–1) | PCMM (2–3) |
+| Stage | HS (size 0) | PCMM (sizes 1–3) |
 | --- | --- | --- |
-| `client_key_generation` | sk (lifted), public enc key, 2× rotation keys, relin key | sk (unlifted), relin key only |
+| `client_key_generation` | sk, public enc key, 2× rotation keys, fc1 fold keys, relin key | sk, relin key only |
 | `server_preprocess_model` | caches CSV weights in padded p×q layout | same call also caches raw CSV shapes |
 | `client_preprocess_input` | normalize + center-crop — cleartext, identical both schemes ([§2](#2-cleartext-pre--and-post-processing)) | ← |
-| `client_encode_encrypt_input` | 128 img/ciphertext, **public** key | whole batch → 1 `ICtMatrix`, **secret** key |
+| `client_encode_encrypt_input` | 32 img/ciphertext, **public** key | whole batch → 1 `ICtMatrix`, **secret** key |
 | `server_encrypted_compute` | the entire inference, on ciphertext | ← |
-| `client_decrypt_decode` | read slot `r*128+i` | read column `(i/ringDim)*degree + i%ringDim` of row `r` |
+| `client_decrypt_decode` | read slot `r*32+i` | read column `(i/ringDim)*degree + i%ringDim` of row `r` |
 | `client_postprocess` | argmax — cleartext, same output format both schemes | ← |
 
 `server_preprocess_model` is invoked **with no arguments**, so it cannot know the instance size or
@@ -201,11 +172,11 @@ matrix. There is no 784-input model to run, and no operation the model performs 
 the encrypted stage.
 
 **Its effect, stated plainly.** 484 pads to **512** coordinates instead of the 1024 that 784 would
-need. At 65536 slots that is **128 images per ciphertext instead of 64** — a **2× throughput and
-bandwidth advantage that follows directly from a cleartext step.** Every per-image timing and every
-upload figure here carries that factor, and anyone comparing against a submission that encrypts all
-784 pixels should keep it in mind. Removing the objection entirely would mean training a 784-input
-variant.
+need. At the HS scheme's 16384 slots that is **32 images per ciphertext instead of 16** — a **2×
+throughput and bandwidth advantage that follows directly from a cleartext step.** Every per-image
+timing and every upload figure here carries that factor, and anyone comparing against a submission
+that encrypts all 784 pixels should keep it in mind. Removing the objection entirely would mean
+training a 784-input variant.
 
 ---
 
@@ -237,14 +208,14 @@ so that check is a precondition for quoting any timing here.
 
 | | size 0 (1) HS | size 1 (100) PCMM | size 2 (1000) PCMM | size 3 (10000) PCMM |
 | --- | --- | --- | --- | --- |
-| harness `Encrypted model preprocessing` | 7.23 s | — | **0.068 s** | **0.071 s** |
-| harness `Encrypted computation` | 0.58 s | — | **0.44 s** | **0.56 s** |
-| ├─ model setup | 0.280 s | — | 0.051 s | 0.050 s |
-| ├─ warm-up (discarded) | 0.022 s | — | 0.032 s | 0.033 s |
-| └─ evaluation | **0.99 ms** | — | **0.91 ms** | **2.63 ms** |
-| Public + evaluation keys | 174.8 M | — | **54.0 K** | **54.0 K** |
-| Encrypted input | 1.6 M | — | 44.5 M | 133.6 M |
-| Encrypted results | 480 K | — | 280 K | 840 K |
+| harness `Encrypted model preprocessing` | 2.15 s | — | **0.068 s** | **0.071 s** |
+| harness `Encrypted computation` | 0.41 s | — | 0.44 s | 0.56 s |
+| ├─ model setup | 0.116 s | — | 0.051 s | 0.050 s |
+| ├─ warm-up (discarded) | 0.017 s | — | 0.032 s | 0.033 s |
+| └─ evaluation | **0.76 ms** | — | **0.91 ms** | **2.63 ms** |
+| Public + evaluation keys | 44.9 M | — | **54.0 K** | **54.0 K** |
+| Encrypted input | 420 K | — | 44.5 M | 133.6 M |
+| Encrypted results | 120 K | — | 280 K | 840 K |
 | **Accuracy** | PASS | — | **0.989** | **0.979** |
 | Harness plaintext model | — | — | 0.981 | 0.978 |
 
@@ -255,11 +226,11 @@ so that check is a precondition for quoting any timing here.
 > machine fills it.
 
 **Read the two harness rows together.** HS's diagonal encoding runs in stage 3
-([§1](#stage-split)), so at size 0 the scored `Encrypted computation` is 0.58 s while the ~7.3 s
+([§1](#stage-split)), so at size 0 the scored `Encrypted computation` is 0.41 s while the ~2.1 s
 of encoding it depends on is reported as `Encrypted model preprocessing`. The work moved out of the
 scored stage; it did not get cheaper. What makes the move legitimate rather than accounting is that
 the encoding depends only on the weights — it is paid once per model, whereas stage 7 is paid once
-per input batch. Quoting the 0.58 s alone, without the 7.23 s beside it, would misrepresent
+per input batch. Quoting the 0.41 s alone, without the 2.15 s beside it, would misrepresent
 single-shot latency.
 
 The stage-7 sub-rows do not sum to the scored figure: the harness times the whole stage-7 *process*,
@@ -274,6 +245,13 @@ reported for reference — the encrypted model scores at or above it at every si
 
 Both schemes, same instances, same machine, same session, same sm_120 library (HS forced at sizes
 2–3 by overriding `usePcmm`):
+
+> **The HS columns predate the size-0 parameter change** and were taken with HS at 2^17 under a
+> lifted key. HS now runs at 2^15, which packs 32 images per ciphertext instead of 128 and so needs
+> 4× as many ciphertexts for the same batch — strictly worse at these sizes, where its cost already
+> tracks ciphertext count almost exactly. The conclusion below therefore holds a fortiori, but the
+> HS numbers themselves are not the ones the current tree would produce and are kept only as the
+> comparison that motivated the split.
 
 | | HS stage 3 | HS eval | HS scored | PCMM stage 3 | PCMM eval | PCMM scored |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -304,9 +282,9 @@ Two honest qualifications:
   mirrored experiment has since been run at 100 images (sm_89 development box, not this table's
   machine) and contradicted the prediction: PCMM reproduced size 2's cost outright, because
   `numBlocks` is 1 for any batch up to 4096, at equal accuracy and ~58 K of key material against
-  HS's 174.8 M. Size 1 therefore ships on PCMM. Size 0 stays on HS for public-key encryption and
-  the key-less fold rather than for speed — it is one block under PCMM too, so PCMM would likely
-  win the timing there as well.
+  HS's key material at the time. Size 1 therefore ships on PCMM. Size 0 stays on HS both for
+  public-key encryption and because HS is now the faster of the two there — 0.76 ms against
+  0.91 ms, since a PCMM block costs the same whether it carries 1 image or 4096.
 - **Earlier drafts of this table reported the opposite on arithmetic.** Their stage-7 timers closed
   before the GPU had finished, under-reporting PCMM by roughly 4.7× and making HS look faster at
   size 2. The timers now synchronize and the evaluation is warm, which reverses that conclusion.
@@ -339,7 +317,8 @@ It is not cheaper — `MLInference_128` spends ~14.6 s of its 14.67 s wall time 
 a throughput benchmark. The harness models a cold client→server round trip instead, so stage 7 is a
 fresh process every run and re-pays that setup each time.
 
-Measured split of HS setup at size 0 (same 4090):
+Measured split of HS setup at size 0 (same 4090, and at the 2^17 lifted parameters HS used then —
+the shape is what matters here, not the magnitudes):
 
 | | |
 | --- | ---: |
@@ -355,7 +334,7 @@ instance-independent, model-only artifacts, exactly what stage 3 exists for.
 decomposition, with no rotation keys involved; `serial::save`/`load` carry the encoded plaintexts
 across the process boundary; and `MatrixVectorEval` gained a constructor that takes them and shares
 rather than re-encodes. Stage 3 therefore does the encoding once and stage 7 rebuilds the evaluator
-from it, which is what drops HS's stage-7 setup to ~0.28 s on the bench machine. Encoding is done
+from it, which is what drops HS's stage-7 setup to ~0.12 s on the bench machine. Encoding is done
 on the device the evaluation will run on: the library does not guarantee that encoding on the CPU
 and moving to a GPU afterwards yields bit-identical plaintexts. PCMM was never affected — its setup
 is ~50 ms, because it has no rotation keys and no diagonals.
@@ -388,13 +367,18 @@ The shared uniform-ternary (hw = 0) budget table is `maxBits128` in
 `maxBitsPolicy128()`, 2^16–2^17 citing ePrint 2024/463, and a 2^12 entry added for PCMM. **These
 are provisional and the Hamming weight may change.**
 
-- **HS.** The switching-key budget is sized from the degree the key was *sampled* at, not the ring
-  it was lifted into: lifting adds no entropy, so a key lifted from 2^15 carries the LWE problem of
-  2^15, and CI halves it again (only half the coefficients are sampled) — effective dimension 2^14,
-  budget 430 bits, against a ~105-bit chain. **The lifted-key construction specifically has not
-  been reviewed.**
-- **PCMM.** No lifting: sampled directly at 2^13, so security rests on `maxBits128(12) = 106` bits
-  (CI → RLWE dimension 2^12) against a ~94-bit chain. Simpler to justify — no lifting argument.
+- **HS.** No lifting: sampled directly at 2^15, the ring it is used in, and CI halves the effective
+  dimension again (only half the coefficients are sampled) — effective dimension 2^14, budget
+  `maxBits128(14) = 430` bits, against a ~105-bit chain. An earlier configuration sampled at 2^15
+  and lifted to 2^17; that carried the same LWE problem and the same 430-bit budget, since lifting
+  adds no entropy, but required a review to accept the lifted-key construction itself. Dropping the
+  lifting removes that argument from the analysis without weakening any parameter — see
+  [§1](#scheme-a--halevishoup-size-0) for why it was worth doing on performance grounds too.
+- **PCMM.** Also no lifting: sampled directly at 2^13, so security rests on `maxBits128(12) = 106`
+  bits (CI → RLWE dimension 2^12) against a ~94-bit chain.
+
+Neither scheme now relies on a lifted key, so the two rest on the same kind of argument and differ
+only in dimension. What remains unreviewed is the `maxBits128` table itself at hw = 0.
 
 Everything a review would change is confined to one block each in `mlp::` and `mlp::pcmm`.
 

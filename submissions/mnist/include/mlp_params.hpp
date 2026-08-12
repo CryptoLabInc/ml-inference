@@ -80,11 +80,11 @@ constexpr double MNIST_STD = 0.3081;
 // discussion in DESIGN.md.
 //===========================================================================
 
-constexpr u32 LOG_DEGREE = 17;
+constexpr u32 LOG_DEGREE = 15;
 constexpr u32 LOG_SLOTS = LOG_DEGREE - 1;   // CI pairs log_slots with N/2
-constexpr u32 SLOTS = 1U << LOG_SLOTS;      // 65536
+constexpr u32 SLOTS = 1U << LOG_SLOTS;      // 16384
 constexpr u32 COORD_DIM = 512;              // 484 zero-padded
-constexpr u32 IMAGES_PER_CTXT = SLOTS / COORD_DIM; // 128
+constexpr u32 IMAGES_PER_CTXT = SLOTS / COORD_DIM; // 32
 
 static_assert(INPUT_DIM <= COORD_DIM, "cropped input must fit the coordinate dim");
 static_assert(SLOTS % COORD_DIM == 0, "coordinate dim must divide the slot count");
@@ -112,13 +112,21 @@ constexpr u32 NUM_MULTS = 3;
 //---------------------------------------------------------------------------
 // SECURITY-RELEVANT PARAMETERS -- ANALYSIS PENDING.
 //
-// The secret key is sampled at 2^SMALL_LOG_DEGREE and lifted to 2^LOG_DEGREE
-// by SKGenerator::genHighDegreeKey. Lifting adds no entropy, so the switching
-// key budget is sized from the degree actually sampled, halved again by CI
-// (SKGenerator samples only half the coefficients there) -- see swkMaxBits().
-// What the lifting buys is fc1's key-less fold: a key lifted from 2^l is
-// invariant under exactly the rotations whose step is a multiple of
-// 2^(l-1), so those rotations need no keys at all.
+// The secret key is sampled at 2^SMALL_LOG_DEGREE. The switching key budget is
+// sized from that degree, halved again by CI (SKGenerator samples only half the
+// coefficients there) -- see swkMaxBits().
+//
+// SMALL_LOG_DEGREE == LOG_DEGREE here, so the key is sampled directly in the
+// ring it is used in and SKGenerator::genHighDegreeKey is a no-op: there is NO
+// lifting, and therefore no separate lifting argument for a review to make.
+// An earlier configuration sampled at 2^15 and lifted to 2^17 to buy fc1's
+// key-less fold (a key lifted from 2^l is invariant under rotations whose step
+// is a multiple of 2^(l-1)). Dropping the lifting costs that fold -- fc1 now
+// folds with keys, see makeLayer -- but lets the whole scheme run at 2^15
+// instead of 2^17, which is a net win: the evaluation is ~25% faster and the
+// rotation keys shrink from 174.8 MB to 44.9 MB. The sampled degree, and hence
+// the LWE problem and the 430-bit budget, are unchanged from that earlier
+// configuration.
 //
 // The >=128-bit claim for this configuration has NOT been signed off yet; the
 // numbers in swkMaxBits() are provisional and HW may change. See section 5,
@@ -165,11 +173,13 @@ inline u32 swkMaxBits() {
 // the q/p cosets summed afterwards ("the fold"). n_out is the number of rows
 // that carry a real output; the rest are zero-padding.
 //
-// fc1 is rectangular 128x512, so it folds 4:1. fc2 is deliberately *squared*
-// to 128x128 rather than the natural 16x128: its fold stride would not meet
-// the key-less fold's invariance period, and a keyed fold costs one mod-down
-// per coset. At 128x128 the cosets become giant steps instead, which the
-// double-hoisted BSGS accumulates behind a single mod-down.
+// fc1 is rectangular 128x512, so it folds 4:1 -- with keys, since the secret
+// key is no longer lifted (see the security block above). fc2 is deliberately
+// *squared* to 128x128 rather than the natural 16x128, which makes q/p == 1 so
+// it needs no fold at all: its cosets become giant steps instead, which the
+// double-hoisted BSGS accumulates behind a single mod-down. That was worth
+// doing when folds were key-less and is worth more now that they cost a
+// mod-down per coset.
 //===========================================================================
 
 struct LayerGeom {
@@ -256,6 +266,9 @@ inline std::vector<i32> gsIndices(const LayerGeom &g) {
 constexpr const char *ENC_KEY_FILE = "enc_key.bin";
 constexpr const char *ROT_KEY_FC1_FILE = "rot_keys_fc1.bin";
 constexpr const char *ROT_KEY_FC2_FILE = "rot_keys_fc2.bin";
+// fc1's fold keys. Written only when the key-less fold is unavailable, which
+// is the case whenever the secret key is not lifted -- see makeLayer.
+constexpr const char *ROT_KEY_FOLD_FILE = "rot_keys_fold.bin";
 constexpr const char *RELIN_KEY_FILE = "relin_key.bin";
 constexpr const char *SECRET_KEY_FILE = "sk.bin";
 

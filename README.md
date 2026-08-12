@@ -25,12 +25,12 @@ Measured on **1× NVIDIA RTX 5090 (sm_120)**, seed 3, through the unmodified har
 | | size 0 (single, 1) | size 1 (small, 100) | size 2 (medium, 1000) | size 3 (large, 10000) |
 | --- | ---: | ---: | ---: | ---: |
 | Circuit | Halevi–Shoup | PCMM | PCMM | PCMM |
-| Encrypted model preprocessing | 7.23 s | — | 0.07 s | 0.07 s |
-| Encrypted computation | **0.58 s** | — | **0.44 s** | **0.56 s** |
-| Total latency | 14.90 s | — | 9.62 s | 16.30 s |
-| Public + evaluation keys | 174.8 M | — | 54.0 K | 54.0 K |
-| Encrypted input | 1.6 M | — | 44.5 M | 133.6 M |
-| Encrypted results | 480 K | — | 280 K | 840 K |
+| Encrypted model preprocessing | 2.15 s | — | 0.07 s | 0.07 s |
+| Encrypted computation | **0.41 s** | — | **0.44 s** | **0.56 s** |
+| Total latency | 9.40 s | — | 9.62 s | 16.30 s |
+| Public + evaluation keys | 44.9 M | — | 54.0 K | 54.0 K |
+| Encrypted input | 420 K | — | 44.5 M | 133.6 M |
+| Encrypted results | 120 K | — | 280 K | 840 K |
 | Accuracy | PASS | — | 0.989 | 0.979 |
 
 *(`Encrypted computation` and `Total latency` are means of the three committed runs; model
@@ -41,10 +41,11 @@ figures for a circuit it no longer runs.)*
 
 *At size 0 the Halevi–Shoup circuit's diagonal encoding runs in stage 3 (`Encrypted model
 preprocessing`), not inside the timed stage 7: it depends only on the weights, never on the input.
-That is why `Encrypted computation` is ~0.57 s rather than the ~7 s it would otherwise be — the
-work moved out of the scored stage rather than disappearing, and total latency is essentially
-unchanged. The warm evaluation inside stage 7 is ~1 ms at every size. See
-[DESIGN.md §4](submissions/mnist/DESIGN.md#4-results) for the full breakdown.*
+That is why `Encrypted computation` is 0.41 s rather than the ~2.5 s it would otherwise be — the
+work moved out of the scored stage rather than disappearing. Quote the two rows together for a
+cold single-shot latency. The warm evaluation inside stage 7 is well under a millisecond at every
+size (0.76 ms at size 0). See [DESIGN.md §4](submissions/mnist/DESIGN.md#4-results) for the full
+breakdown.*
 
 ## License
 
