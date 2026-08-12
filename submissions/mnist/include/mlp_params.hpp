@@ -49,13 +49,21 @@ constexpr u32 HIDDEN_DIM = 128;
 constexpr u32 LABEL_DIM = 10;
 
 // Which homomorphic scheme a stage uses is a function of instance size alone:
-// single/small (1, 100 images) use the Halevi-Shoup layer scheme below;
-// medium/large (1000, 10000) use the PCMM (GEMM-based) scheme in
-// mlp_pcmm.hpp -- pcmm's per-image cost keeps falling as the batch grows,
-// while HS's fixed 128-images-per-ciphertext packing does not. Every stage
-// binary dispatches on this at its own entry point; see mlp_pcmm.hpp for the
-// PCMM-side parameters.
-inline bool usePcmm(InstanceSize size) { return size >= InstanceSize::MEDIUM; }
+// single (1 image) uses the Halevi-Shoup layer scheme below; small/medium/large
+// (100, 1000, 10000) use the PCMM (GEMM-based) scheme in mlp_pcmm.hpp --
+// pcmm's per-image cost keeps falling as the batch grows, while HS's fixed
+// 128-images-per-ciphertext packing does not. Every stage binary dispatches on
+// this at its own entry point; see mlp_pcmm.hpp for the PCMM-side parameters.
+//
+// small sits on PCMM because pcmm::numBlocks() is 1 for every batch up to
+// pcmm::ringDim() (4096): 100 images and 1000 images do *identical* work, so
+// small inherits medium's cost outright -- against HS it drops the rotation
+// keys entirely (175 MB -> 60 KB of public key material) and skips the
+// diagonal encoding. single stays on HS: it is the one size where the
+// key-less fold and public-key encryption are exercised, and PCMM's matrix
+// encrypt is necessarily symmetric-key (see runPcmm in
+// client_key_generation.cpp).
+inline bool usePcmm(InstanceSize size) { return size >= InstanceSize::SMALL; }
 
 // Normalization the model was trained under (torchvision ToTensor + Normalize).
 // The harness writes pixels already scaled to [0,1], so only the affine part
@@ -257,7 +265,7 @@ inline size_t numCtxts(size_t n) {
 }
 
 //===========================================================================
-// PCMM (GEMM-based) scheme parameters, for medium/large.
+// PCMM (GEMM-based) scheme parameters, for small/medium/large.
 //
 // feature = ciphertext row (pcmm's contraction dim), image = slot -- the
 // opposite packing from the HS scheme above. One message holds

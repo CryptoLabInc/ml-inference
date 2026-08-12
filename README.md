@@ -12,8 +12,8 @@ replaces the reference OpenFHE implementation under [`submissions/mnist/`](submi
 - Upstream harness documentation: [fhe-benchmarking/ml-inference](https://github.com/fhe-benchmarking/ml-inference)
 
 Two CKKS circuits evaluate the same 2-layer MLP (`fc1(128×484) → x² → fc2(10×128)`), chosen by
-instance size alone: a Halevi–Shoup rotation-folded matvec at sizes 0–1, a PCMM (GEMM-based)
-circuit at sizes 2–3. Deviations from the harness model are documented in
+instance size alone: a Halevi–Shoup rotation-folded matvec at size 0, a PCMM (GEMM-based)
+circuit at sizes 1–3. Deviations from the harness model are documented in
 [DESIGN.md §3](submissions/mnist/DESIGN.md#3-deviation-from-the-harness-model).
 
 ## Benchmark results
@@ -24,20 +24,22 @@ Measured on **1× NVIDIA RTX 5090 (sm_120)**, seed 3, through the unmodified har
 
 | | size 0 (single, 1) | size 1 (small, 100) | size 2 (medium, 1000) | size 3 (large, 10000) |
 | --- | ---: | ---: | ---: | ---: |
-| Circuit | Halevi–Shoup | Halevi–Shoup | PCMM | PCMM |
-| Encrypted model preprocessing | 7.23 s | 7.50 s | 0.07 s | 0.07 s |
-| Encrypted computation | **0.58 s** | **0.58 s** | **0.44 s** | **0.56 s** |
-| Total latency | 14.90 s | 16.67 s | 9.62 s | 16.30 s |
-| Public + evaluation keys | 174.8 M | 174.8 M | 54.0 K | 54.0 K |
-| Encrypted input | 1.6 M | 1.6 M | 44.5 M | 133.6 M |
-| Encrypted results | 480 K | 480 K | 280 K | 840 K |
-| Accuracy | PASS | 0.980 | 0.989 | 0.979 |
+| Circuit | Halevi–Shoup | PCMM | PCMM | PCMM |
+| Encrypted model preprocessing | 7.23 s | — | 0.07 s | 0.07 s |
+| Encrypted computation | **0.58 s** | — | **0.44 s** | **0.56 s** |
+| Total latency | 14.90 s | — | 9.62 s | 16.30 s |
+| Public + evaluation keys | 174.8 M | — | 54.0 K | 54.0 K |
+| Encrypted input | 1.6 M | — | 44.5 M | 133.6 M |
+| Encrypted results | 480 K | — | 280 K | 840 K |
+| Accuracy | PASS | — | 0.989 | 0.979 |
 
 *(`Encrypted computation` and `Total latency` are means of the three committed runs; model
 preprocessing and key generation are measured once per size. Accuracy varies in the third decimal
-across runs from encryption noise.)*
+across runs from encryption noise. Size 1 moved from Halevi–Shoup to PCMM after these
+measurements were taken; its column is cleared pending re-measurement rather than carrying over
+figures for a circuit it no longer runs.)*
 
-*At sizes 0–1 the Halevi–Shoup circuit's diagonal encoding runs in stage 3 (`Encrypted model
+*At size 0 the Halevi–Shoup circuit's diagonal encoding runs in stage 3 (`Encrypted model
 preprocessing`), not inside the timed stage 7: it depends only on the weights, never on the input.
 That is why `Encrypted computation` is ~0.57 s rather than the ~7 s it would otherwise be — the
 work moved out of the scored stage rather than disappearing, and total latency is essentially

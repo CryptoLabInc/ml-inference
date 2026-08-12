@@ -7,9 +7,9 @@
 // Stage 7: the encrypted inference. Everything the model computes happens
 // here, on ciphertext. Dispatches on instance size (mlp::usePcmm):
 //
-//   HS (single/small):  fc1 matvec -> fold -> +b1 -> x^2 -> rescale ->
-//                        fc2 matvec -> +b2
-//   PCMM (medium/large): fc1 pcmm+b1 -> x^2 -> rescale -> fc2 pcmm -> +b2
+//   HS (single):               fc1 matvec -> fold -> +b1 -> x^2 -> rescale ->
+//                               fc2 matvec -> +b2
+//   PCMM (small/medium/large): fc1 pcmm+b1 -> x^2 -> rescale -> fc2 pcmm -> +b2
 //
 // The server holds no secret key in either scheme. It loads the evaluation
 // keys the client published and the cleartext model it owns.

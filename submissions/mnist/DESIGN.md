@@ -24,7 +24,7 @@ accuracy 97.96%.
 Two circuits evaluate it, chosen by instance size alone (`mlp::usePcmm` in
 [`include/mlp_params.hpp`](include/mlp_params.hpp)) — same model, same weights, different packing.
 
-### Scheme A — Halevi–Shoup (sizes 0–1)
+### Scheme A — Halevi–Shoup (size 0)
 
 | | |
 | --- | --- |
@@ -56,7 +56,7 @@ noise growth — in log2(4) = 2 automorphisms. The divisibility is asserted at k
 getting it wrong throws nothing, it silently decrypts to noise. `frobMap` is supplied by the
 vendored HEaaN2 in [`install/`](install/).
 
-### Scheme B — PCMM (sizes 2–3)
+### Scheme B — PCMM (sizes 1–3)
 
 Feature = ciphertext **row** (the GEMM contraction dim), image = **column/slot** — the opposite
 convention from HS. Written against HEaaN2's public API (`HomEvalMatrix::pcmm`,
@@ -80,6 +80,14 @@ L0  +b2 (plaintext add, no level cost), decrypt
 One message holds 4096 images; larger batches split into further *blocks* inside a single
 `ICtMatrix`, transparently. `x²` runs tensor → rescale → relin (not the usual tensor → relin →
 rescale), so the relin key is built at the *post-rescale* level.
+
+**Why size 1 is here and not on HS.** `numBlocks` is 1 for every batch up to 4096, so 100 images
+and 1000 images do *identical* work — size 1 inherits size 2's cost outright rather than paying
+some smaller-batch penalty. Against HS at the same size that removes the rotation keys altogether
+(174.8 M → ~58 K of public key material) and the diagonal encoding with them, at equal accuracy.
+Size 0 stays on HS: it is the one instance that exercises the key-less fold and public-key
+encryption, both of which PCMM cannot offer (its matrix encrypt is necessarily symmetric-key —
+see [Encryption: public key vs symmetric key](#encryption-public-key-vs-symmetric-key)).
 
 **Bias fold.** `b1` rides as an extra column of `U1` (`128×485`) against an appended ones-row in the
 packed input, so fc1's pcmm computes `W1·X + b1` directly. `b2` is *not* folded that way — it would
@@ -106,6 +114,10 @@ ciphertexts but **only a secret-key overload for matrices** (no `IEncKey` overlo
 secret key.** Both are purely client-side and the secret key never leaves `seckeydir()` (which the
 harness does not measure) — but it is a real asymmetry, disclosed here rather than left to be
 noticed.
+
+Moving size 1 onto PCMM widens it: public-key encryption is now exercised at size 0 alone. Keeping
+size 0 on HS is deliberate for that reason as much as for the key-less fold — it is what stops the
+submission from resting on the symmetric-key path everywhere.
 
 ### Stage split
 
@@ -223,21 +235,27 @@ so that check is a precondition for quoting any timing here.
 
 ### As shipped
 
-| | size 0 (1) HS | size 1 (100) HS | size 2 (1000) PCMM | size 3 (10000) PCMM |
+| | size 0 (1) HS | size 1 (100) PCMM | size 2 (1000) PCMM | size 3 (10000) PCMM |
 | --- | --- | --- | --- | --- |
-| harness `Encrypted model preprocessing` | 7.23 s | 7.50 s | **0.068 s** | **0.071 s** |
-| harness `Encrypted computation` | 0.58 s | 0.58 s | **0.44 s** | **0.56 s** |
-| ├─ model setup | 0.280 s | 0.278 s | 0.051 s | 0.050 s |
-| ├─ warm-up (discarded) | 0.022 s | 0.023 s | 0.032 s | 0.033 s |
-| └─ evaluation | **0.99 ms** | **0.99 ms** | **0.91 ms** | **2.63 ms** |
-| Public + evaluation keys | 174.8 M | 174.8 M | **54.0 K** | **54.0 K** |
-| Encrypted input | 1.6 M | 1.6 M | 44.5 M | 133.6 M |
-| Encrypted results | 480 K | 480 K | 280 K | 840 K |
-| **Accuracy** | PASS | **0.980** | **0.989** | **0.979** |
-| Harness plaintext model | — | 0.960 | 0.981 | 0.978 |
+| harness `Encrypted model preprocessing` | 7.23 s | — | **0.068 s** | **0.071 s** |
+| harness `Encrypted computation` | 0.58 s | — | **0.44 s** | **0.56 s** |
+| ├─ model setup | 0.280 s | — | 0.051 s | 0.050 s |
+| ├─ warm-up (discarded) | 0.022 s | — | 0.032 s | 0.033 s |
+| └─ evaluation | **0.99 ms** | — | **0.91 ms** | **2.63 ms** |
+| Public + evaluation keys | 174.8 M | — | **54.0 K** | **54.0 K** |
+| Encrypted input | 1.6 M | — | 44.5 M | 133.6 M |
+| Encrypted results | 480 K | — | 280 K | 840 K |
+| **Accuracy** | PASS | — | **0.989** | **0.979** |
+| Harness plaintext model | — | — | 0.981 | 0.978 |
+
+> **Size 1 awaits re-measurement.** It moved from HS to PCMM after this table was taken, so its
+> former column described a circuit it no longer runs and has been cleared rather than carried
+> over. Because `numBlocks` is 1 at both 100 and 1000 images, it is expected to land on size 2's
+> figures; that is a prediction, not a measurement, and the column stays empty until the bench
+> machine fills it.
 
 **Read the two harness rows together.** HS's diagonal encoding runs in stage 3
-([§1](#stage-split)), so at sizes 0–1 the scored `Encrypted computation` is 0.58 s while the ~7.3 s
+([§1](#stage-split)), so at size 0 the scored `Encrypted computation` is 0.58 s while the ~7.3 s
 of encoding it depends on is reported as `Encrypted model preprocessing`. The work moved out of the
 scored stage; it did not get cheaper. What makes the move legitimate rather than accounting is that
 the encoding depends only on the weights — it is paid once per model, whereas stage 7 is paid once
@@ -252,7 +270,7 @@ Accuracy varies slightly run to run from encryption noise (size 3 measured 0.979
 runs); the table rounds. The harness plaintext row is the harness's own model on the same subset,
 reported for reference — the encrypted model scores at or above it at every size.
 
-### Why PCMM at medium/large — a controlled A/B
+### Why PCMM at sizes 1–3 — a controlled A/B
 
 Both schemes, same instances, same machine, same session, same sm_120 library (HS forced at sizes
 2–3 by overriding `usePcmm`):
@@ -280,10 +298,15 @@ size rather than a tuning constant.
 
 Two honest qualifications:
 
-- **This A/B justifies PCMM at sizes 2–3; it does not locate the crossover.** It forces HS at the
-  sizes PCMM ships at, not the reverse, so it says nothing about how PCMM would fare at 1 or 100
-  images — where HS's single-ciphertext packing is expected to win, and where the split leaves it
-  in place. Establishing the exact crossover point would need the mirrored experiment.
+- **The crossover turned out to be below 100 images, not above it.** This A/B forces HS at the
+  sizes PCMM ships at, not the reverse, so it could not locate the crossover; an earlier draft
+  predicted from that gap that HS's single-ciphertext packing would win at 1 and 100 images. The
+  mirrored experiment has since been run at 100 images (sm_89 development box, not this table's
+  machine) and contradicted the prediction: PCMM reproduced size 2's cost outright, because
+  `numBlocks` is 1 for any batch up to 4096, at equal accuracy and ~58 K of key material against
+  HS's 174.8 M. Size 1 therefore ships on PCMM. Size 0 stays on HS for public-key encryption and
+  the key-less fold rather than for speed — it is one block under PCMM too, so PCMM would likely
+  win the timing there as well.
 - **Earlier drafts of this table reported the opposite on arithmetic.** Their stage-7 timers closed
   before the GPU had finished, under-reporting PCMM by roughly 4.7× and making HS look faster at
   size 2. The timers now synchronize and the evaluation is warm, which reverses that conclusion.
@@ -347,7 +370,7 @@ is ~50 ms, because it has no rotation keys and no diagonals.
 
 Before quoting any ratio:
 
-1. **HS is still preprocessing-bound at sizes 0–1**, the cost has only moved stages: 0.58 s scored
+1. **HS is still preprocessing-bound at size 0**, the cost has only moved stages: 0.58 s scored
    and 7.23 s of stage-3 encoding, against 0.99 ms of actual evaluation. For a single-shot,
    cold-start latency comparison the honest number is the ~7.8 s of both stages together — not the
    0.58 s scored figure, and certainly not 1 ms. The reference submission pays its equivalent work

@@ -6,8 +6,8 @@
 //
 // Stage 2.2: generate all key material at the client.
 //
-// Dispatches on instance size (mlp::usePcmm): single/small use the
-// Halevi-Shoup layer scheme below; medium/large use PCMM (mlp_pcmm.hpp).
+// Dispatches on instance size (mlp::usePcmm): single uses the Halevi-Shoup
+// layer scheme below; small/medium/large use PCMM (mlp_pcmm.hpp).
 // The two schemes need different key material -- HS wants rotation keys for
 // its two matvec layers plus a public encryption key; PCMM needs neither
 // rotation keys nor a public encryption key (its matrix encrypt is

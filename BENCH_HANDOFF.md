@@ -127,8 +127,16 @@ Sanity-check as you go:
 - Accuracy should be ≈ 0.98 at sizes 1–3 (size 0 is a single image — the harness reports PASS and
   writes no Quality block).
 - `server_reported_steps.json` should show three lines: model setup, warm-up, encrypted computation.
-- HS (sizes 0–1) setup is expected to dominate — on this machine roughly 4–5 s, against a warm
-  evaluation on the order of a millisecond. That is expected and explained in DESIGN.md §4.
+- **Only size 0 runs Halevi–Shoup now**; sizes 1–3 all run PCMM. Its setup is expected to dominate
+  there — on this machine roughly 4–5 s, against a warm evaluation on the order of a millisecond.
+  That is expected and explained in DESIGN.md §4.
+- **Size 1 should now look like size 2, not like its old self.** `numBlocks` is 1 for any batch up
+  to 4096, so 100 and 1000 images do identical PCMM work. Expect ~0.07 s model preprocessing and
+  ~58 K of public keys, against the 7.50 s and 174.8 M its old HS column reported. If size 1 still
+  reports hundreds of megabytes of keys, the binaries are stale — rebuild before measuring.
+- Only stage 3 for size 0 should print `diagonals encoded`; sizes 1–3 should print
+  `PCMM instance: HS diagonals not needed`. That line is the quickest confirmation that the
+  instance marker is working.
 
 ---
 
@@ -139,6 +147,13 @@ Sanity-check as you go:
 The results table has two intentionally blank rows — **Encrypted computation** and **Total
 latency**. Fill both from the committed runs (mean of the three). Bandwidth and accuracy rows are
 already filled and are machine-independent; correct them if your runs disagree.
+
+The **entire size 1 column is also blank**, and for a different reason: that size moved from
+Halevi–Shoup to PCMM after the previous measurements, so its old figures described a circuit it no
+longer runs and were cleared rather than carried over. Fill every cell in that column, bandwidth
+and accuracy included — none of it survives from the old table. Same for the size 1 column of
+DESIGN.md §4 and the note beneath it, which says the column is pending; delete that note once it
+is filled.
 
 Also confirm the stated hardware line matches this machine.
 

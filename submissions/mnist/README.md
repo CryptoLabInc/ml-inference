@@ -21,8 +21,8 @@ packing:
 
 | Size | Scheme | Why |
 | --- | --- | --- |
-| 0–1 (1, 100 images) | **Halevi–Shoup** rotation-folded matvec | faster arithmetic at small batches |
-| 2–3 (1000, 10000) | **PCMM** (GEMM-based) | needs no rotation keys and no diagonal encoding, so ~105× less model preprocessing (~70 ms against HS's ~7.3 s), and 8.5–29× faster evaluation at these batch sizes |
+| 0 (1 image) | **Halevi–Shoup** rotation-folded matvec | the one size exercising the key-less fold and public-key encryption, neither of which PCMM offers |
+| 1–3 (100, 1000, 10000) | **PCMM** (GEMM-based) | needs no rotation keys and no diagonal encoding, so ~105× less model preprocessing (~70 ms against HS's ~7.3 s), and 8.5–29× faster evaluation at the larger batch sizes |
 
 Every stage binary dispatches internally, so the harness contract (seven fixed executable names,
 `<size>` as the only argument) is unchanged.
