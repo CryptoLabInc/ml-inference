@@ -18,6 +18,8 @@
 #include "mlp_pcmm.hpp"
 #include "mlp_pipeline.hpp"
 
+#include <set>
+
 #include <iostream>
 
 using namespace heaan;
@@ -25,9 +27,10 @@ using namespace mlp;
 
 namespace {
 
-// The secret key is sampled at 2^SMALL_LOG_DEGREE and lifted to 2^LOG_DEGREE.
-// Lifting adds no entropy -- it buys fc1's key-less fold, and the switching
-// key budget is sized from the sampled degree. See mlp_params.hpp.
+// The secret key is sampled at 2^SMALL_LOG_DEGREE, which equals LOG_DEGREE in
+// the shipped configuration -- so genHighDegreeKey is a no-op and the key is
+// NOT lifted. The switching key budget is sized from the sampled degree either
+// way. See mlp_params.hpp.
 //
 // Rotation keys are derived from the layer *shapes* only. The client has no
 // model and is not entitled to one, so nothing here may depend on the weights.
@@ -35,21 +38,24 @@ void runHS(const InstanceParams &prms) {
     const Levels levels = buildLevels();
     const u32 top = levels.top();
 
-    // ---- secret key: sampled low, lifted high ----
+    // ---- secret key ----
+    // genHighDegreeKey lifts from SMALL_LOG_DEGREE to LOG_DEGREE; when they are
+    // equal it simply returns the key in its own ring. Kept in this form so a
+    // future configuration can re-enable lifting by lowering SMALL_LOG_DEGREE
+    // alone.
     SKGenerator skgen{SKGenParams{LOG_DEGREE, HW, NTT_ALG}};
     SKGenerator skgen_low{SKGenParams{SMALL_LOG_DEGREE, HW, NTT_ALG}};
     auto sk = skgen.genHighDegreeKey(*skgen_low.genKey());
 
-    // The key-less fold is valid only when fc1's fold stride divides evenly
-    // into the lifted key's invariance period. Checked here so a change to the
-    // packing fails loudly at key generation rather than decrypting to noise.
+    // fc1 can fold with bare automorphisms only when its stride is a multiple
+    // of the key's rotation-invariance period, which needs a lifted key. With
+    // SMALL_LOG_DEGREE == LOG_DEGREE the period is the whole slot count and the
+    // stride never divides it, so fc1 folds with keys and this stage must ship
+    // them. Decided here, from the same constants makeLayer uses, so the two
+    // cannot disagree.
     const u32 period = rotInvariantPeriod(SMALL_LOG_DEGREE);
     const u32 fc1_stride = IMAGES_PER_CTXT * FC1.p;
-    if (fc1_stride % period != 0)
-        throw std::runtime_error(
-            "fc1 fold stride " + std::to_string(fc1_stride) +
-            " is not a multiple of the rotation-invariance period " +
-            std::to_string(period) + "; the key-less fold would be wrong");
+    const bool fc1_keyless = (fc1_stride % period == 0);
 
     // ---- public encryption key, at the level inputs are encrypted to ----
     EncKeyGenerator enckeygen{EncKeyGenParams{DiscreteGaussian(NOISE_STDDEV),
@@ -79,6 +85,18 @@ void runHS(const InstanceParams &prms) {
     SwKeyGenerator relin_gen(makeSwkParams(levels, fc1_out));
     auto relin_key = relin_gen.genRelinKey(*sk);
 
+    // fc1's fold keys, one per non-identity coset. They live at fc1's OUTPUT
+    // level because the fold runs after adjust() has landed the ciphertext
+    // there. Only generated when the key-less fold is unavailable.
+    RotKeyPtrs fold_keys;
+    if (!fc1_keyless) {
+        std::set<i32> fold_steps;
+        for (u32 j = 1; j < FC1.q / FC1.p; ++j)
+            fold_steps.insert(static_cast<i32>(fc1_stride * j));
+        SwKeyGenerator fold_gen(makeSwkParams(levels, fc1_out));
+        fold_keys = fold_gen.genRotKeys(*sk, fold_steps);
+    }
+
     // ---- serialize ----
     fs::create_directories(prms.pubkeydir());
     fs::create_directories(prms.seckeydir());
@@ -87,6 +105,9 @@ void runHS(const InstanceParams &prms) {
     serial::save((prms.pubkeydir() / ENC_KEY_FILE).string(), *enc_key);
     serial::save((prms.pubkeydir() / ROT_KEY_FC1_FILE).string(), rot_keys_fc1);
     serial::save((prms.pubkeydir() / ROT_KEY_FC2_FILE).string(), rot_keys_fc2);
+    if (!fc1_keyless)
+        serial::save((prms.pubkeydir() / ROT_KEY_FOLD_FILE).string(),
+                     fold_keys);
     serial::save((prms.pubkeydir() / RELIN_KEY_FILE).string(), *relin_key);
 }
 
