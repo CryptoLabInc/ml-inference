@@ -103,13 +103,16 @@ void runHS(const InstanceParams &prms) {
 // does not measure), but it is a real, disclosed asymmetry against the HS
 // path's public-key encryption. See "Encryption: public key vs symmetric key"
 // in DESIGN.md.
-void runPcmm(const InstanceParams &prms) {
-    const Levels levels = pcmm::buildLevels();
+void runPcmm(const InstanceParams &prms, InstanceSize size) {
+    // Large is tuned separately from small/medium, so every PCMM stage
+    // resolves its parameters from the instance size -- see mlp_params.hpp.
+    const auto prof = pcmm::profile(size);
+    const Levels levels = pcmm::buildLevels(prof);
 
-    SKGenerator skgen{SKGenParams{pcmm::LOG_DEGREE, pcmm::HW, pcmm::NTT_ALG}};
+    SKGenerator skgen{SKGenParams{prof.log_degree, pcmm::HW, prof.ntt_alg}};
     auto sk = skgen.genKey();
 
-    auto relin_key = pcmm::genRelinKey(*sk, levels, pcmm::SWK_MARGIN);
+    auto relin_key = pcmm::genRelinKey(*sk, levels, prof);
 
     fs::create_directories(prms.pubkeydir());
     fs::create_directories(prms.seckeydir());
@@ -135,7 +138,7 @@ int main(int argc, char *argv[]) try {
     // without also re-checking what the harness then attributes to stage 2.2.
 
     if (usePcmm(size))
-        runPcmm(prms);
+        runPcmm(prms, size);
     else
         runHS(prms);
 

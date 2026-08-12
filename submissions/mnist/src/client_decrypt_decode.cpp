@@ -61,14 +61,15 @@ std::vector<std::vector<double>> runHS(const InstanceParams &prms,
     return scores;
 }
 
-std::vector<std::vector<double>> runPcmm(const InstanceParams &prms,
-                                         Device dev) {
-    const Levels levels = pcmm::buildLevels();
+std::vector<std::vector<double>> runPcmm(const InstanceParams &prms, Device dev,
+                                         InstanceSize size) {
+    const auto prof = pcmm::profile(size);
+    const Levels levels = pcmm::buildLevels(prof);
     // decode reads the dft flag from the plaintext's own metadata (just
     // flipped back to slot by setDFT below), so the encoder object's own
     // params only need to match everything else -- the same coefficient
     // encoder weights and bias were built with.
-    const EnDecoder coeff_encoder = pcmm::makeCoeffEncoder(levels);
+    const EnDecoder coeff_encoder = pcmm::makeCoeffEncoder(levels, prof);
     const EnDecryptor encryptor{EncryptParams{DiscreteGaussian(NOISE_STDDEV)}};
 
     auto sk = serial::loadAsPtr<ISecretKey>(
@@ -77,16 +78,16 @@ std::vector<std::vector<double>> runPcmm(const InstanceParams &prms,
     const auto num_images = static_cast<u32>(prms.getBatchSize());
     auto cy = pcmm::loadCtMatrix(
         (prms.ctxtdowndir() / pcmm::RESULT_CTMATRIX_FILE).string(),
-        LABEL_DIM, pcmm::numCols(num_images), dev);
+        LABEL_DIM, pcmm::numCols(prof, num_images), dev);
 
-    pcmm::setDFT(*cy, /*dft=*/true, num_images);
+    pcmm::setDFT(*cy, /*dft=*/true, num_images, prof);
     auto dy = IPtMatrix::make();
     encryptor.decrypt(*cy, *sk, *dy);
     Matrix<Real> yc;
     coeff_encoder.decode(*dy, yc);
     yc.to(Device::CPU);
 
-    return pcmm::unpackLogits(yc, num_images);
+    return pcmm::unpackLogits(yc, num_images, prof);
 }
 
 } // namespace
@@ -96,7 +97,8 @@ int main(int argc, char *argv[]) try {
     const InstanceParams prms(size);
     const Device dev = targetDevice();
 
-    const auto scores = usePcmm(size) ? runPcmm(prms, dev) : runHS(prms, dev);
+    const auto scores =
+        usePcmm(size) ? runPcmm(prms, dev, size) : runHS(prms, dev);
 
     fs::create_directories(prms.iointermdir());
     writeSamples(scores, prms.model_scores_file().string());
