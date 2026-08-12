@@ -56,11 +56,11 @@ constexpr u32 LABEL_DIM = 10;
 // this at its own entry point; see mlp_pcmm.hpp for the PCMM-side parameters.
 //
 // small sits on PCMM because pcmm::numBlocks() is 1 for every batch up to
-// pcmm::slotsPerMsg() (2048 under their shared profile): 100 images and 1000
-// images do *identical* work, so
-// small inherits medium's cost outright -- against HS it drops the rotation
-// keys entirely (175 MB -> 60 KB of public key material) and skips the
-// diagonal encoding. single stays on HS: it is the one size where the
+// pcmm::slotsPerMsg() (2048 under the profile small and medium share): 100
+// images and 1000 images do *identical* work, so small inherits medium's cost
+// outright -- against HS it drops the rotation keys entirely (175 MB -> 110 KB
+// of public key material) and skips the diagonal encoding. single stays on HS:
+// it is the one size where the
 // key-less fold and public-key encryption are exercised, and PCMM's matrix
 // encrypt is necessarily symmetric-key (see runPcmm in
 // client_key_generation.cpp).

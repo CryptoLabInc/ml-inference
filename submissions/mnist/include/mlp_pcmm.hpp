@@ -4,9 +4,10 @@
 // See the LICENSE.md file for details.
 //============================================================================
 //
-// mlp_pcmm.hpp - the PCMM (GEMM-based) inference scheme, used for medium and
-// large instances (see mlp::usePcmm). Written independently against HEaaN2's
-// public API; no HEaaN2 source is vendored. HEaaN2's own mlp/PCMM benchmark
+// mlp_pcmm.hpp - the PCMM (GEMM-based) inference scheme, used for the small,
+// medium and large instances (see mlp::usePcmm). Written independently
+// against HEaaN2's public API; no HEaaN2 source is vendored. Its own mlp/PCMM
+// benchmark
 // was read as a design reference for the algorithm -- the pcmm circuit for
 // this exact model, the section-6.3 coeff/slot relabeling trick, and the
 // bias-folded-into-a-weight-column layout are its ideas, reimplemented here
@@ -15,8 +16,9 @@
 //
 // Packing (opposite of the HS scheme in mlp_pipeline.hpp): feature = matrix
 // row (pcmm's contraction dimension), image = column/slot. One message holds
-// ringDim() images; a larger batch splits into further "blocks" inside a
-// single ICtMatrix, transparent to callers here.
+// slotsPerMsg() images; a larger batch splits into further "blocks" inside a
+// single ICtMatrix, transparent to callers here. Note slotsPerMsg() is not
+// ringDim() -- see their definitions in mlp_params.hpp.
 //
 // Bias: b1 rides along as an extra column of U1 against an appended
 // "ones" row in the packed input, so fc1's pcmm computes W1*X + b1 directly.
@@ -74,10 +76,10 @@ heaan::EnDecoder makeSlotEncoder(const heaan::Levels &levels,
 // Pack a batch of already-cropped, already-normalized images (INPUT_DIM
 // values each, row-major, in the format client_preprocess_input writes) into
 // the [IN_P x n_cols] matrix pcmm consumes: row r holds feature r across
-// every image, image i lands in column (i / ringDim()) * (1 << LOG_DEGREE) +
-// (i % ringDim()), and the trailing IN_P-1 row is a constant 1 (the bias
-// carrier). Width uses the client-side stored-coefficient count
-// (1 << LOG_DEGREE) per block, not numCols() -- see encodeMatrix().
+// every image, image i lands in column (i / slotsPerMsg(p)) * (1 <<
+// p.log_degree) + (i % slotsPerMsg(p)), and the trailing IN_P-1 row is a
+// constant 1 (the bias carrier). Width uses the client-side stored-coefficient
+// count (1 << p.log_degree) per block, not numCols() -- see encodeMatrix().
 heaan::Matrix<heaan::Real>
 packImages(const std::vector<std::vector<double>> &images, const Profile &p);
 
@@ -138,7 +140,7 @@ heaan::Ptr<heaan::ISwKey> genRelinKey(const heaan::ISecretKey &sk,
 // setDFT of its own, so this goes through a BatchRLWE ICiphertext bridge.
 // `num_images` is needed to recompute the column count in the target
 // labeling (coeff- and slot-encoded columns are counted in different units
-// under CI; see mlp_pcmm.cpp).
+// under CI, and coincide under NORMAL; see mlp_pcmm.cpp).
 //===========================================================================
 
 void setDFT(heaan::ICtMatrix &ct, bool dft, u32 num_images, const Profile &p);

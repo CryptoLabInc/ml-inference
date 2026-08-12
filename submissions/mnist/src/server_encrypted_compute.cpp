@@ -191,7 +191,8 @@ StageTimes runPcmm(const InstanceParams &prms, Device dev, InstanceSize size) {
     {
         const Timer t_warm;
         auto warm = ICtMatrix::make();
-        pcmm::inference(model, *relin_key, *cx, *warm, levels, num_images, prof);
+        pcmm::inference(model, *relin_key, *cx, *warm, levels, num_images,
+                        prof);
         tm.warmup_s = t_warm.seconds();
     }
 

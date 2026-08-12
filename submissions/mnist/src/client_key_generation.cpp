@@ -90,7 +90,8 @@ void runHS(const InstanceParams &prms) {
     serial::save((prms.pubkeydir() / RELIN_KEY_FILE).string(), *relin_key);
 }
 
-// PCMM's ISecretKey is sampled directly at pcmm::LOG_DEGREE (no lifting: pcmm
+// PCMM's ISecretKey is sampled directly at the profile's log_degree (no
+// lifting: pcmm
 // has no key-less fold to buy with one) and needs no rotation keys at all --
 // only a relinearization key for the x^2 step.
 //
