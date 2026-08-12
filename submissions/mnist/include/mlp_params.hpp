@@ -136,8 +136,9 @@ constexpr double NOISE_STDDEV = 3.2;
 // keyed by RLWE dimension. 2^12..2^15 from HEaven's maxBitsPolicy128(); 2^16
 // and 2^17 from ePrint 2024/463. The entries are hw-specific -- do not
 // substitute a value from an hw > 0 table. Shared by both the HS layer scheme
-// (which uses 13..17) and the PCMM scheme in mlp_pcmm.hpp (which needs 12,
-// its minimum viable ring): one table, so a review only edits it once.
+// (which uses 13..17) and the PCMM scheme in mlp_pcmm.hpp (which needs 12 for
+// the small/medium profile and 14 for large): one table, so a review only
+// edits it once.
 inline u32 maxBits128(u32 log_degree) {
     switch (log_degree) {
     case 12: return 106;

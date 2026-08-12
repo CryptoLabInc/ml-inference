@@ -63,12 +63,31 @@ convention from HS. Written against HEaaN2's public API (`HomEvalMatrix::pcmm`,
 `ICtMatrix`/`IPtMatrix`, `Matrix<Real>`); HEaaN2's own `mlp/PCMM` benchmark was read as a design
 reference for the algorithm, but [`src/mlp_pcmm.cpp`](src/mlp_pcmm.cpp) is our own code.
 
-| | |
-| --- | --- |
-| Ring | N = 2^13, CI subring, `GRAFTED`, 4096 coefficients/message |
-| Modulus chain | 28 + 3×22 ≈ 94 bits, 4 levels, no bootstrapping |
-| Secret key | uniform ternary (hw = 0), sampled **directly** at 2^13 — no lifting |
-| Noise / SWK budget | σ = 3.2 / `maxBits128(12) = 106` bits, margin 5.0 |
+Sizes 1–2 and size 3 are **tuned separately**. The batch size decides how many blocks a matrix row
+splits into, and that in turn decides which ring and which modulus chain come out cheapest, so one
+setting cannot be right for every size. Sizes 1 and 2 share one profile because both fit a single
+block and do identical work.
+`mlp::pcmm::profile(size)` in [`include/mlp_params.hpp`](include/mlp_params.hpp) is the selector.
+
+| | sizes 1–2 (100, 1000) | size 3 (10000) |
+| --- | --- | --- |
+| Ring | N = 2^12, **NORMAL**, `SIMPLE32` | N = 2^15, **CI subring**, `SIMPLE32` |
+| Coefficients / message | 4096 (the full degree) | 16384 (CI's free half) |
+| Images / message | 2048 | 16384 |
+| Blocks per row | 1 | 1 |
+| Modulus chain | 34 + 3×24 ≈ 106 bits, 4 levels, no bootstrapping | 44 + 3×27 ≈ 125 bits, 4 levels, no bootstrapping |
+| Secret key | uniform ternary (hw = 0), sampled **directly** at 2^12 — no lifting | uniform ternary (hw = 0), sampled **directly** at 2^15 — no lifting |
+| Noise / SWK budget | σ = 3.2 / `maxBits128(12) = 106` bits, margin 5.0 | σ = 3.2 / `maxBits128(14) = 430` bits, margin 5.0 |
+
+`SIMPLE32` (32-bit RNS primes) halves the word size pcmm's GEMM backend operates on, at the cost of
+more primes for the same modulus budget. Both chains are sized against that trade, so neither is
+valid read back against a `GRAFTED` budget.
+
+Note the first two rows differ: **coefficients per message is not images per message.** CI stores
+half the degree but packs one real image per stored coefficient; NORMAL stores the whole degree but
+packs images into its N/2 complex slots. The two coincide under CI only, which is why
+[`mlp_params.hpp`](include/mlp_params.hpp) keeps `ringDim()` and `slotsPerMsg()` as separate
+functions.
 
 ```
 L3  encrypt X, encode U1 → fc1 pcmm+rescale   → L2
@@ -77,14 +96,15 @@ L1  encode U2 → fc2 pcmm+rescale              → L0
 L0  +b2 (plaintext add, no level cost), decrypt
 ```
 
-One message holds 4096 images; larger batches split into further *blocks* inside a single
+One message holds 2048 images at sizes 1–2 and 16384 at size 3, so every shipped size is a single
+block; a batch beyond that would split into further *blocks* inside a single
 `ICtMatrix`, transparently. `x²` runs tensor → rescale → relin (not the usual tensor → relin →
 rescale), so the relin key is built at the *post-rescale* level.
 
-**Why size 1 is here and not on HS.** `numBlocks` is 1 for every batch up to 4096, so 100 images
+**Why size 1 is here and not on HS.** `numBlocks` is 1 for every batch up to 2048, so 100 images
 and 1000 images do *identical* work — size 1 inherits size 2's cost outright rather than paying
 some smaller-batch penalty. Against HS at the same size that removes the rotation keys altogether
-(174.8 M → ~58 K of public key material) and the diagonal encoding with them, at equal accuracy.
+(174.8 M → ~110 K of public key material) and the diagonal encoding with them, at equal accuracy.
 Size 0 stays on HS: it is the one instance that exercises the key-less fold and public-key
 encryption, both of which PCMM cannot offer (its matrix encrypt is necessarily symmetric-key —
 see [Encryption: public key vs symmetric key](#encryption-public-key-vs-symmetric-key)).
@@ -303,7 +323,7 @@ Two honest qualifications:
   predicted from that gap that HS's single-ciphertext packing would win at 1 and 100 images. The
   mirrored experiment has since been run at 100 images (sm_89 development box, not this table's
   machine) and contradicted the prediction: PCMM reproduced size 2's cost outright, because
-  `numBlocks` is 1 for any batch up to 4096, at equal accuracy and ~58 K of key material against
+  `numBlocks` is 1 for any batch up to 2048, at equal accuracy and ~110 K of key material against
   HS's 174.8 M. Size 1 therefore ships on PCMM. Size 0 stays on HS for public-key encryption and
   the key-less fold rather than for speed — it is one block under PCMM too, so PCMM would likely
   win the timing there as well.
@@ -314,7 +334,11 @@ Two honest qualifications:
   `Encrypted computation` was honest throughout.
 - **PCMM's encrypted input is larger**, not smaller (44.5 M vs 13.1 M at size 2; 133.6 M vs 129.6 M
   at size 3, where the gap nearly closes). It wins on compute and key material, and loses on upload
-  bandwidth — most visibly at size 2.
+  bandwidth — most visibly at size 2. **The per-size tuning widened that gap deliberately**: the
+  new chains are 106 and 125 bits against the 94 these figures were taken at, which buys evaluation
+  time and costs upload. On the development box the same trade showed size 2's input at 51.2 M
+  against 44.5 M, and size 3's at 242.5 M against 133.6 M. Bandwidth is reported by the harness
+  alongside timing, so this is a real cost, not an accounting artefact.
 
 ### Cross-check against HEaaN2's own mlp benchmarks
 
@@ -393,8 +417,19 @@ are provisional and the Hamming weight may change.**
   2^15, and CI halves it again (only half the coefficients are sampled) — effective dimension 2^14,
   budget 430 bits, against a ~105-bit chain. **The lifted-key construction specifically has not
   been reviewed.**
-- **PCMM.** No lifting: sampled directly at 2^13, so security rests on `maxBits128(12) = 106` bits
-  (CI → RLWE dimension 2^12) against a ~94-bit chain. Simpler to justify — no lifting argument.
+- **PCMM.** No lifting, so security rests on `maxBits128` at the RLWE dimension alone. Since the
+  per-size tuning, though, there are **two** parameter sets and they do not share a dimension:
+  - **sizes 1–2**: sampled directly at 2^12 in the NORMAL ring, where the RLWE dimension *is* the
+    degree — budget `maxBits128(12) = 106` bits, against a 34 + 3×24 = 106-bit chain.
+  - **size 3**: sampled directly at 2^15 in the CI subring, which halves it — budget
+    `maxBits128(14) = 430` bits, against a 44 + 3×27 = 125-bit chain.
+
+  Still simpler to justify than HS — there is no lifting argument at either point — but a review
+  now has to clear **both**, not one. And note that the sizes 1–2 chain lands exactly on its budget
+  figure (106 against 106) where the previous single setting sat ~12 bits under it (94 against
+  106). The keys build and the instances run, so the gadget constraint is satisfied; whether the
+  remaining margin is the right one is a question for the same pending review, not something these
+  runs answer.
 
 Everything a review would change is confined to one block each in `mlp::` and `mlp::pcmm`.
 
