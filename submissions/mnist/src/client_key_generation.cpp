@@ -115,7 +115,7 @@ void runHS(const InstanceParams &prms) {
 // stage saves to seckeydir(). That is still exclusively a client-side
 // operation and sk never leaves seckeydir() (which the harness does not
 // measure), but it is a real asymmetry against the HS path's public-key
-// encryption. See "Encryption: public key vs symmetric key" in DESIGN.md.
+// encryption.
 void runPcmm(const InstanceParams &prms, InstanceSize size) {
     // Large is tuned separately from small/medium, so every PCMM stage
     // resolves its parameters from the instance size -- see mlp_params.hpp.

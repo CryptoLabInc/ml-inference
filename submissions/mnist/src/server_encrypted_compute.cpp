@@ -17,7 +17,7 @@
 // Setup (loading keys, and -- scheme-dependently -- binding them to the
 // pre-encoded diagonals or encoding U1/U2/b2, which needs the instance size)
 // is timed separately from evaluation, and both are reported through
-// io/<size>/server_reported_steps.json. See "Stage split" in DESIGN.md.
+// io/<size>/server_reported_steps.json.
 
 #include "mlp_pcmm.hpp"
 #include "mlp_pipeline.hpp"

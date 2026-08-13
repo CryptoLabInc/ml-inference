@@ -21,8 +21,6 @@
 // PCMM's model encoding cannot move here -- its shapes depend on the batch
 // size -- but it is cheap. Its raw weights are cached here so the CSVs are
 // parsed once.
-//
-// See "Stage split" in DESIGN.md for how the timing is reported.
 
 #include "mlp_pcmm.hpp"
 #include "mlp_pipeline.hpp"

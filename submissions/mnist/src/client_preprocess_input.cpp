@@ -6,14 +6,14 @@
 //
 // Stage 5: cleartext client-side input preparation.
 //
-// Two operations, both in the clear, both documented in DESIGN.md:
+// Two operations, both in the clear:
 //   1. normalize (p - MNIST_MEAN) / MNIST_STD -- the harness writes pixels
 //      already scaled to [0,1]; this is the same affine map the harness's own
 //      reference model applies in harness/mnist/test.py.
 //   2. center-crop 28x28 -> 22x22 (784 -> 484) -- the model was TRAINED on
 //      cropped input, so this is part of the model definition. It also halves
 //      the padded coordinate dimension, which is what fits 32 images per
-//      ciphertext instead of 16. See "The crop" in DESIGN.md.
+//      ciphertext instead of 16.
 
 #include "mlp_pipeline.hpp"
 

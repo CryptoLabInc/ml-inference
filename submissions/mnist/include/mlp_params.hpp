@@ -69,8 +69,7 @@ constexpr double MNIST_STD = 0.3081;
 //
 // One image occupies COORD_DIM padded coordinates; coordinate c of image i
 // lives in slot c * IMAGES_PER_CTXT + i. 484 pads to 512 rather than 1024,
-// which fits 32 images per ciphertext instead of 16 -- see the crop discussion
-// in DESIGN.md.
+// which fits 32 images per ciphertext instead of 16.
 //===========================================================================
 
 constexpr u32 LOG_DEGREE = 15;
@@ -119,9 +118,8 @@ constexpr u32 NUM_MULTS = 3;
 // -- and leaves the sampled degree, and hence the budget, unchanged.
 //
 // The >=128-bit claim for this configuration has NOT been signed off: the
-// numbers in maxBits128() are provisional and HW may change. See section 5,
-// "Security", of DESIGN.md. Everything a review would need to change is in
-// this block.
+// numbers in maxBits128() are provisional and HW may change. Everything a
+// review would need to change is in this block.
 //---------------------------------------------------------------------------
 
 constexpr u32 SMALL_LOG_DEGREE = 15; // degree the secret key is sampled at
@@ -336,9 +334,9 @@ constexpr u32 IN_P = INPUT_DIM + 1; // 485
 
 //---------------------------------------------------------------------------
 // SECURITY-RELEVANT PARAMETERS -- ANALYSIS PENDING, same status as the HS
-// scheme's block above and the same open item in DESIGN.md section 5. PCMM's
-// secret key is sampled directly at the profile's log_degree (no lifting), so
-// its security rests on maxBits128(logRlweDim(profile)) alone.
+// scheme's block above. PCMM's secret key is sampled directly at the profile's
+// log_degree (no lifting), so its security rests on
+// maxBits128(logRlweDim(profile)) alone.
 //
 // The budget each profile's chain is sized against:
 //   small/medium  NORMAL N=2^12 -> RLWE dim 2^12

@@ -5,22 +5,17 @@ This fork is a submission for the [HomomorphicEncryption.org](https://www.Homomo
 [HEaaN2](https://heaan.io), CryptoLab's CKKS library. The harness is unmodified; the submission
 replaces the reference OpenFHE implementation under [`submissions/mnist/`](submissions/mnist/).
 
-- **What it computes and how**: [submissions/mnist/DESIGN.md](submissions/mnist/DESIGN.md)
-- **Building and running** (requires an sm_120 GPU — see the pre-flight check):
-  [submissions/mnist/BUILDING.md](submissions/mnist/BUILDING.md)
-- **Overview and licensing**: [submissions/mnist/README.md](submissions/mnist/README.md)
+- **Everything about the submission** — design, parameters, security, build, run, results:
+  [submissions/mnist/README.md](submissions/mnist/README.md)
+- **Building requires an sm_120 GPU** — see the
+  [pre-flight check](submissions/mnist/README.md#-this-submission-requires-an-sm_120-gpu)
 - Upstream harness documentation: [fhe-benchmarking/ml-inference](https://github.com/fhe-benchmarking/ml-inference)
 
 Two CKKS circuits evaluate the same 2-layer MLP (`fc1(128×484) → x² → fc2(10×128)`), chosen by
 instance size alone: a Halevi–Shoup rotation-folded matvec at size 0, a PCMM (GEMM-based)
-circuit at sizes 1–3. Deviations from the harness model are documented in
-[DESIGN.md §3](submissions/mnist/DESIGN.md#3-deviation-from-the-harness-model).
-
-> **Security.** Both schemes use uniform-ternary secrets and size their switching-key modulus
-> against a ≥128-bit budget table indexed by RLWE dimension; the policy, the table and how each
-> scheme is instantiated under it are in
-> [DESIGN.md §5](submissions/mnist/DESIGN.md#5-security). **That analysis is not finalised** — do
-> not cite these parameters as reviewed.
+circuit at sizes 1–3. The model deviates from the harness's own
+(`784→128→64→10` with ReLU): two layers instead of three, `x²` instead of ReLU, and a 484-dim
+center-cropped input, trained separately.
 
 ## Benchmark results
 
@@ -59,7 +54,7 @@ alternative to it: the harness times stage 7 as a whole process, so the scored f
 key loading, process and CUDA start-up and ciphertext I/O, and the arithmetic itself is well under
 1% of it. **`Encrypted computation` is the number the benchmark scores**; the evaluation row is
 what the circuit costs once a server is warm. See
-[DESIGN.md §4](submissions/mnist/DESIGN.md#4-results) for the full breakdown.*
+[Results](submissions/mnist/README.md#results) for the full breakdown.*
 
 ## License
 
