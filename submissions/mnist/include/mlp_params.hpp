@@ -26,7 +26,6 @@
 #include "HEaaN2/HEaaN2.hpp"
 #include "params.h"
 
-#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -113,21 +112,11 @@ constexpr u32 NUM_MULTS = 3;
 //---------------------------------------------------------------------------
 // SECURITY-RELEVANT PARAMETERS -- ANALYSIS PENDING.
 //
-// The secret key is sampled at 2^SMALL_LOG_DEGREE. The switching key budget is
-// sized from that degree, halved again by CI (SKGenerator samples only half the
-// coefficients there) -- see swkMaxBits().
-//
-// SMALL_LOG_DEGREE == LOG_DEGREE here, so the key is sampled directly in the
-// ring it is used in and SKGenerator::genHighDegreeKey is a no-op: there is NO
-// lifting, and therefore no separate lifting argument for a review to make.
-// An earlier configuration sampled at 2^15 and lifted to 2^17 to buy fc1's
-// key-less fold (a key lifted from 2^l is invariant under rotations whose step
-// is a multiple of 2^(l-1)). Dropping the lifting costs that fold -- fc1 now
-// folds with keys, see makeLayer -- but lets the whole scheme run at 2^15
-// instead of 2^17, which is a net win: the evaluation is ~25% faster and the
-// rotation keys shrink from 174.8 MB to 44.9 MB. The sampled degree, and hence
-// the LWE problem and the 430-bit budget, are unchanged from that earlier
-// configuration.
+// The secret key is sampled directly at 2^LOG_DEGREE with uniform-ternary
+// coefficients -- no lifting into a larger ring, so there is no separate
+// lifting argument for a review to make. The switching-key budget is read at
+// that degree, halved once more for CI (which samples only half the
+// coefficients) -- see swkMaxBits().
 //
 // The >=128-bit claim for this configuration has NOT been signed off yet; the
 // numbers in swkMaxBits() are provisional and HW may change. See section 5,
@@ -135,8 +124,7 @@ constexpr u32 NUM_MULTS = 3;
 // this block.
 //---------------------------------------------------------------------------
 
-constexpr u32 SMALL_LOG_DEGREE = 15; // degree the secret key is sampled at
-constexpr u32 HW = 0;                // 0 = uniform ternary
+constexpr u32 HW = 0; // 0 = uniform ternary
 constexpr double SWK_MARGIN = 5.0;
 constexpr double NOISE_STDDEV = 3.2;
 
@@ -164,7 +152,7 @@ inline u32 maxBits128(u32 log_degree) {
 // The budget a switching key may spend: that of the degree the secret was
 // sampled at, less one for the conjugate-invariant ring.
 inline u32 swkMaxBits() {
-    return maxBits128(SMALL_LOG_DEGREE -
+    return maxBits128(LOG_DEGREE -
                       (NTT_ALG == heaan::NTTAlgorithm::CYC_FOR_CI ? 1 : 0));
 }
 
@@ -175,13 +163,10 @@ inline u32 swkMaxBits() {
 // the q/p cosets summed afterwards ("the fold"). n_out is the number of rows
 // that carry a real output; the rest are zero-padding.
 //
-// fc1 is rectangular 128x512, so it folds 4:1 -- with keys, since the secret
-// key is no longer lifted (see the security block above). fc2 is deliberately
-// *squared* to 128x128 rather than the natural 16x128, which makes q/p == 1 so
-// it needs no fold at all: its cosets become giant steps instead, which the
-// double-hoisted BSGS accumulates behind a single mod-down. That was worth
-// doing when folds were key-less and is worth more now that they cost a
-// mod-down per coset.
+// fc1 is rectangular 128x512, so it folds 4:1, with rotation keys. fc2 is
+// deliberately *squared* to 128x128 rather than the natural 16x128, which makes
+// q/p == 1 so it needs no fold at all: its cosets ride the matvec's giant steps
+// instead.
 //===========================================================================
 
 struct LayerGeom {
@@ -198,41 +183,6 @@ constexpr LayerGeom FC2{128, 128, LABEL_DIM, 64, false};
 // Levels each layer runs at, as offsets below the top level.
 constexpr u32 FC1_IN_DROP = 0, FC1_OUT_DROP = 1;
 constexpr u32 FC2_IN_DROP = 2, FC2_OUT_DROP = 3;
-
-//===========================================================================
-// Key-less rotation helpers.
-//
-// HomEval::frobMap takes a Galois exponent rather than a slot step, and the
-// conversion is arithmetic on the ring degree with no key material in it.
-//===========================================================================
-
-// The Galois exponent whose automorphism rotates left by `step`:
-// 5^(step mod 2^(log_degree-1)) mod 2^(log_degree+1). Same conversion the
-// keyed HomEval::rot performs internally.
-inline i32 frobPowForRot(i32 step, u32 log_degree) {
-    const uint64_t num_slots = 1ULL << (log_degree - 1);
-    const uint64_t modulus = 1ULL << (log_degree + 1);
-    auto exp = static_cast<uint64_t>(
-        ((static_cast<int64_t>(step) % static_cast<int64_t>(num_slots)) +
-         static_cast<int64_t>(num_slots)) %
-        static_cast<int64_t>(num_slots));
-    uint64_t pow = 1, base = 5;
-    for (; exp != 0; exp >>= 1) {
-        if (exp & 1)
-            pow = (pow * base) % modulus;
-        base = (base * base) % modulus;
-    }
-    return static_cast<i32>(pow);
-}
-
-// Rotation-step granularity at which frobMap is valid for a key lifted from
-// 2^log_degree_low: such a key is fixed by exactly the rotations whose step is
-// a multiple of 2^(log_degree_low - 1). A divisibility, not a lower bound.
-inline u32 rotInvariantPeriod(u32 log_degree_low) {
-    if (log_degree_low == 0)
-        throw std::runtime_error("log_degree_low must be positive");
-    return 1U << (log_degree_low - 1);
-}
 
 //===========================================================================
 // BSGS index sets.
@@ -268,8 +218,6 @@ inline std::vector<i32> gsIndices(const LayerGeom &g) {
 constexpr const char *ENC_KEY_FILE = "enc_key.bin";
 constexpr const char *ROT_KEY_FC1_FILE = "rot_keys_fc1.bin";
 constexpr const char *ROT_KEY_FC2_FILE = "rot_keys_fc2.bin";
-// fc1's fold keys. Written only when the key-less fold is unavailable, which
-// is the case whenever the secret key is not lifted -- see makeLayer.
 constexpr const char *ROT_KEY_FOLD_FILE = "rot_keys_fold.bin";
 constexpr const char *RELIN_KEY_FILE = "relin_key.bin";
 constexpr const char *SECRET_KEY_FILE = "sk.bin";

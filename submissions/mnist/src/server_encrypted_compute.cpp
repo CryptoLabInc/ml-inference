@@ -116,13 +116,9 @@ StageTimes runHS(const InstanceParams &prms, Device dev) {
     const auto enc2 = serial::load<MatrixVectorEvalEncoded>(
         std::string(CACHE_DIR) + "/fc2_diags.bin", dev);
 
-    // fc1's fold keys, present whenever the secret key is not lifted (the
-    // shipped configuration). Absent for a lifted key, where fc1 folds with
-    // bare automorphisms and makeLayer ignores the empty set.
-    RotKeyPtrs fold_keys;
-    const auto fold_path = prms.pubkeydir() / ROT_KEY_FOLD_FILE;
-    if (fs::exists(fold_path))
-        fold_keys = serial::load<RotKeyPtrs>(fold_path.string(), dev);
+    // fc1's fold keys; fc2 does not fold and takes none.
+    auto fold_keys = serial::load<RotKeyPtrs>(
+        (prms.pubkeydir() / ROT_KEY_FOLD_FILE).string(), dev);
 
     const Layer fc1 = makeLayer(FC1, w1.b, enc1, levels, fc1_in, fc1_out,
                                 encoder, std::move(rot_fc1),
