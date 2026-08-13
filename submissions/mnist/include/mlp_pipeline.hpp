@@ -106,10 +106,9 @@ struct Layer {
     // Layer moves only the pointers.
     std::unique_ptr<heaan::RotKeyPtrs> rot_keys;
     std::unique_ptr<heaan::MatrixVectorEval> matvec;
-    bool keyless_fold = false;
     i32 fold_stride = 0;
     u32 fold_factor = 1;
-    heaan::RotKeyPtrs fold_keys; // only when the fold must be keyed
+    heaan::RotKeyPtrs fold_keys;
     std::vector<i32> fold_steps;
     heaan::Ptr<heaan::IPlaintext> bias;
     heaan::KeyPtr relin_key; // only when activate
@@ -132,8 +131,7 @@ heaan::MatrixVectorEvalEncoded encodeDiags(const LayerGeom &geom,
 // be destroyed afterwards. Only the bias is encoded here -- one message per
 // layer, negligible next to the diagonals.
 // `fold_keys` is consumed too, and is required exactly when the layer folds
-// (q/p > 1) and the key-less path is unavailable -- i.e. whenever the secret
-// key is not lifted. Pass an empty RotKeyPtrs for a layer that does not fold.
+// (q/p > 1). Pass an empty RotKeyPtrs for a layer that does not fold.
 Layer makeLayer(const LayerGeom &geom, const std::vector<double> &bias,
                 const heaan::MatrixVectorEvalEncoded &encoded,
                 const heaan::Levels &levels, u32 in_level, u32 out_level,
