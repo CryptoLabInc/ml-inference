@@ -5,14 +5,12 @@
 # ---------------------------------------------------------------------------
 # HEaaN2 MNIST MLP submission.
 #
-# Built against the HEaaN2 *public* API only -- this repo carries none of
-# HEaaN2's own implementation source. It does carry a prebuilt HEaaN2 install
-# (public headers + libheaan2.so.0.2.0) vendored under install/, the same
-# pattern CryptoLab's own Zn-multiplication fhe-benchmarking submission uses;
-# see LICENSE and LICENSE-THIRD-PARTY in this directory. That means a bare
-# clone of this fork builds with no private-repo access or SSH key needed.
-# Point CMAKE_PREFIX_PATH elsewhere (scripts/build_task.sh does this from
-# $HEAAN2_DIR / $HEAAN2_ROOT) to use a different install or build from source.
+# Built against the HEaaN2 *public* API only. A prebuilt HEaaN2 install (public
+# headers + libheaan2.so.0.2.0) is vendored under install/ -- see LICENSE and
+# LICENSE-THIRD-PARTY in this directory -- so a bare clone of this fork builds
+# with no private-repo access or SSH key needed. Point CMAKE_PREFIX_PATH
+# elsewhere (scripts/build_task.sh does this from $HEAAN2_DIR / $HEAAN2_ROOT)
+# to use a different install.
 
 cmake_minimum_required(VERSION 3.23)
 project(
@@ -77,8 +75,7 @@ foreach(stage ${MLP_STAGES})
     INSTALL_RPATH_USE_LINK_PATH TRUE)
   # ...and baked in as DT_RPATH rather than the modern default DT_RUNPATH.
   # libheaan2.so needs libcudart/libcublas/libtcmalloc but carries no RPATH of
-  # its own -- HEaaN2's install rules run file(RPATH_REMOVE) on it -- and
-  # DT_RUNPATH is deliberately NOT consulted when resolving a *dependency's*
+  # its own, and DT_RUNPATH is not consulted when resolving a *dependency's*
   # dependencies, so the loader would fail on those three. DT_RPATH is
   # inherited down the whole chain, which covers them.
   target_link_options(${stage} PRIVATE "LINKER:--disable-new-dtags")

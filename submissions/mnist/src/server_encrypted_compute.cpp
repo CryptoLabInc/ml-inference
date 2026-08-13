@@ -14,11 +14,10 @@
 // The server holds no secret key in either scheme. It loads the evaluation
 // keys the client published and the cleartext model it owns.
 //
-// Setup (loading keys, and -- scheme-dependently -- constructing the two
-// MatrixVectorEvals or encoding U1/U2/b2, both of which need the instance
-// size) is timed separately from evaluation, and both are reported through
-// io/<size>/server_reported_steps.json. Stage 3 could not do this setup: it
-// never learns the instance size. See "Stage split" in DESIGN.md.
+// Setup (loading keys, and -- scheme-dependently -- binding them to the
+// pre-encoded diagonals or encoding U1/U2/b2, which needs the instance size)
+// is timed separately from evaluation, and both are reported through
+// io/<size>/server_reported_steps.json. See "Stage split" in DESIGN.md.
 
 #include "mlp_pcmm.hpp"
 #include "mlp_pipeline.hpp"
@@ -39,13 +38,11 @@ using namespace mlp;
 namespace {
 
 // Elapsed seconds, synchronizing the device at both ends so a GPU timing
-// measures work *completed* rather than kernels *launched*. HEaaN2 kernel
-// launches are asynchronous: without the sync the evaluation timer closes
-// while the GPU is still working, and the stage under-reports by an order of
-// magnitude (the cost then silently surfaces in whatever forces completion
-// next -- here the result serialization, which the harness still counts). The
-// library's own mlp benchmarks sync for the same reason, so this also keeps
-// the two sets of numbers comparable.
+// measures work *completed* rather than kernels *launched*. Kernel launches
+// are asynchronous: without the sync the evaluation timer closes while the GPU
+// is still working and the stage under-reports by an order of magnitude, the
+// cost then surfacing in whatever forces completion next (here the result
+// serialization, which the harness still counts).
 class Timer {
 public:
     Timer() {
@@ -70,15 +67,13 @@ private:
 
 constexpr const char *CACHE_DIR = MODEL_CACHE_DIR;
 
-// One full discarded inference pass before the timed evaluation, the same
-// warm-up HEaaN2's own mlp benchmarks run: the first use of each CUDA kernel
-// pays module loading, the first allocation grows the memory pool, and the
-// NTT workspace is built lazily. Without it those one-time costs land inside
-// the timed evaluation and the reported number is not comparable to a warm
-// server (or to HEaaN2's benchmark figures). The harness times this stage as
-// one process, so the warm-up does not move any cost out of the harness's
-// "Encrypted computation" -- it costs about one extra warm evaluation there,
-// and is reported as its own line in server_reported_steps.json.
+// One full discarded inference pass runs before the timed evaluation: the
+// first use of each GPU kernel pays one-time initialization and the first
+// allocations grow internal workspaces. Without the warm-up those costs land
+// inside the timed evaluation, which then understates a warm server. The
+// harness times this stage as one process, so the warm-up moves no cost out of
+// its "Encrypted computation" -- it adds about one warm evaluation there, and
+// is reported as its own line in server_reported_steps.json.
 struct StageTimes {
     double setup_s = 0.0;
     double warmup_s = 0.0;
@@ -92,9 +87,7 @@ StageTimes runHS(const InstanceParams &prms, Device dev) {
     const u32 top = levels.top();
     const EnDecoder encoder = makeEncoder(levels);
     const HomEval eval{HomEvalParams{levels}};
-    // adjust() lives on HomEvalFlexible; it is stateless and cannot be merged
-    // with HomEval, whose 3-argument tensor() the 4-argument one would hide.
-    const HomEvalFlexible flex;
+    const HomEvalFlexible flex; // stateless; provides adjust()
 
     const u32 fc1_in = top - FC1_IN_DROP, fc1_out = top - FC1_OUT_DROP;
     const u32 fc2_in = top - FC2_IN_DROP, fc2_out = top - FC2_OUT_DROP;

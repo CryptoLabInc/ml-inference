@@ -6,9 +6,10 @@
 //
 // Stage 8: decrypt the result and read the logits back out.
 //
-// HS: logit r of image i within a ciphertext lives at slot r*128 + i.
-// PCMM: logit r of image i lives at column (i / ringDim()) * degree +
-// (i % ringDim()) of matrix row r -- see mlp_pcmm.hpp's unpackLogits.
+// HS: logit r of image i within a ciphertext lives at slot
+// r*IMAGES_PER_CTXT + i.
+// PCMM: logit r of image i lives at column (i / slotsPerMsg()) * degree +
+// (i % slotsPerMsg()) of matrix row r -- see pcmm::unpackLogits.
 //
 // Either scheme writes the same output format: one line per image, LABEL_DIM
 // space-separated logits, so client_postprocess needs no dispatch of its own.
@@ -65,10 +66,9 @@ std::vector<std::vector<double>> runPcmm(const InstanceParams &prms, Device dev,
                                          InstanceSize size) {
     const auto prof = pcmm::profile(size);
     const Levels levels = pcmm::buildLevels(prof);
-    // decode reads the dft flag from the plaintext's own metadata (just
-    // flipped back to slot by setDFT below), so the encoder object's own
-    // params only need to match everything else -- the same coefficient
-    // encoder weights and bias were built with.
+    // The result is relabelled back to slot-encoded by setDFT below, so decode
+    // follows the plaintext's own label; the encoder only has to agree on the
+    // remaining parameters -- the same one the weights were built with.
     const EnDecoder coeff_encoder = pcmm::makeCoeffEncoder(levels, prof);
     const EnDecryptor encryptor{EncryptParams{DiscreteGaussian(NOISE_STDDEV)}};
 

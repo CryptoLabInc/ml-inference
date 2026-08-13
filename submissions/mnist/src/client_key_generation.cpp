@@ -7,20 +7,18 @@
 // Stage 2.2: generate all key material at the client.
 //
 // Dispatches on instance size (mlp::usePcmm): single uses the Halevi-Shoup
-// layer scheme below; small/medium/large use PCMM (mlp_pcmm.hpp).
-// The two schemes need different key material -- HS wants rotation keys for
-// its two matvec layers plus a public encryption key; PCMM needs neither
-// rotation keys nor a public encryption key (its matrix encrypt is
-// necessarily symmetric-key, see runPcmm) but does need a relinearization
-// key at a different level. Each size only ever runs one scheme, so the two
-// keygen paths never collide inside the same io/<size>/ directory tree.
+// layer scheme below, small/medium/large use PCMM (mlp_pcmm.hpp). The two need
+// different key material -- HS wants rotation keys for its two matvec layers
+// plus a public encryption key; PCMM needs neither (its matrix encryption is
+// necessarily symmetric-key, see runPcmm) but does need a relinearization key
+// at a different level. Each size runs one scheme only, so the two keygen
+// paths never collide inside the same io/<size>/ tree.
 
 #include "mlp_pcmm.hpp"
 #include "mlp_pipeline.hpp"
 
-#include <set>
-
 #include <iostream>
+#include <set>
 
 using namespace heaan;
 using namespace mlp;
@@ -28,9 +26,8 @@ using namespace mlp;
 namespace {
 
 // The secret key is sampled at 2^SMALL_LOG_DEGREE, which equals LOG_DEGREE in
-// the shipped configuration -- so genHighDegreeKey is a no-op and the key is
-// NOT lifted. The switching key budget is sized from the sampled degree either
-// way. See mlp_params.hpp.
+// the shipped configuration, so the key is NOT lifted. The switching-key
+// budget is sized from the sampled degree either way. See mlp_params.hpp.
 //
 // Rotation keys are derived from the layer *shapes* only. The client has no
 // model and is not entitled to one, so nothing here may depend on the weights.
@@ -39,20 +36,18 @@ void runHS(const InstanceParams &prms) {
     const u32 top = levels.top();
 
     // ---- secret key ----
-    // genHighDegreeKey lifts from SMALL_LOG_DEGREE to LOG_DEGREE; when they are
-    // equal it simply returns the key in its own ring. Kept in this form so a
-    // future configuration can re-enable lifting by lowering SMALL_LOG_DEGREE
-    // alone.
+    // Sampled at SMALL_LOG_DEGREE and lifted to LOG_DEGREE; with the two equal
+    // this is a plain key in its own ring. Kept in this form so a future
+    // configuration can re-enable lifting by lowering SMALL_LOG_DEGREE alone.
     SKGenerator skgen{SKGenParams{LOG_DEGREE, HW, NTT_ALG}};
     SKGenerator skgen_low{SKGenParams{SMALL_LOG_DEGREE, HW, NTT_ALG}};
     auto sk = skgen.genHighDegreeKey(*skgen_low.genKey());
 
     // fc1 can fold with bare automorphisms only when its stride is a multiple
     // of the key's rotation-invariance period, which needs a lifted key. With
-    // SMALL_LOG_DEGREE == LOG_DEGREE the period is the whole slot count and the
-    // stride never divides it, so fc1 folds with keys and this stage must ship
-    // them. Decided here, from the same constants makeLayer uses, so the two
-    // cannot disagree.
+    // SMALL_LOG_DEGREE == LOG_DEGREE the stride never divides it, so fc1 folds
+    // with keys and this stage must ship them. Decided from the same constants
+    // makeLayer uses, so the two cannot disagree.
     const u32 period = rotInvariantPeriod(SMALL_LOG_DEGREE);
     const u32 fc1_stride = IMAGES_PER_CTXT * FC1.p;
     const bool fc1_keyless = (fc1_stride % period == 0);
@@ -111,20 +106,16 @@ void runHS(const InstanceParams &prms) {
     serial::save((prms.pubkeydir() / RELIN_KEY_FILE).string(), *relin_key);
 }
 
-// PCMM's ISecretKey is sampled directly at the profile's log_degree (no
-// lifting: pcmm
-// has no key-less fold to buy with one) and needs no rotation keys at all --
-// only a relinearization key for the x^2 step.
+// PCMM's secret key is sampled directly at the profile's log_degree (no
+// lifting: PCMM has no key-less fold to buy with one) and needs no rotation
+// keys at all -- only a relinearization key for the x^2 step.
 //
-// HEaaN2's public EnDecryptor exposes matrix encrypt/decrypt only against a
-// secret key (there is no public-encryption-key overload for IPtMatrix /
-// ICtMatrix, unlike the plain-ciphertext overload the HS path uses above).
-// The client's own sk is therefore what client_encode_encrypt_input encrypts
-// with, and what this stage saves to seckeydir() -- still exclusively a
-// client-side operation, and sk never leaves seckeydir() (which the harness
-// does not measure), but it is a real, disclosed asymmetry against the HS
-// path's public-key encryption. See "Encryption: public key vs symmetric key"
-// in DESIGN.md.
+// Matrix-shaped ciphertexts are encryptable under a secret key only, so
+// client_encode_encrypt_input encrypts with the client's own sk, which this
+// stage saves to seckeydir(). That is still exclusively a client-side
+// operation and sk never leaves seckeydir() (which the harness does not
+// measure), but it is a real asymmetry against the HS path's public-key
+// encryption. See "Encryption: public key vs symmetric key" in DESIGN.md.
 void runPcmm(const InstanceParams &prms, InstanceSize size) {
     // Large is tuned separately from small/medium, so every PCMM stage
     // resolves its parameters from the instance size -- see mlp_params.hpp.
@@ -155,9 +146,9 @@ int main(int argc, char *argv[]) try {
 
     // Deliberately no targetDevice() here: key generation runs on the CPU. The
     // client is a separate party and need not own a GPU, and the keys are
-    // serialized either way -- server_encrypted_compute is what loads them onto
-    // the device. Do not "fix" this by moving the key material to the GPU
-    // without also re-checking what the harness then attributes to stage 2.2.
+    // serialized either way -- server_encrypted_compute loads them onto the
+    // device. Moving key material to the GPU here would change what the
+    // harness attributes to stage 2.2.
 
     if (usePcmm(size))
         runPcmm(prms, size);

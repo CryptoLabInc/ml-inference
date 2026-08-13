@@ -46,7 +46,7 @@ measures the byte size of `ciphertexts_upload/`, so the layout is a free choice.
 
 `fc1` is rectangular 128×512 and folds 4:1, with keys. `fc2` is deliberately *squared* to 128×128
 rather than the natural 16×128, making `q/p == 1` so it needs no fold at all: its cosets ride the
-matvec's giant steps instead, which double-hoisted BSGS accumulates behind a single mod-down.
+matvec's giant steps instead.
 
 ### Scheme B — PCMM (sizes 1–3)
 
@@ -56,8 +56,8 @@ opposite convention from HS.
 Sizes 1–2 and size 3 are **tuned separately**. The batch size decides how many blocks a matrix row
 splits into, and that in turn decides which ring and which modulus chain come out cheapest, so one
 setting cannot be right for every size. Sizes 1 and 2 share one profile because both fit a single
-block and do identical work.
-`mlp::pcmm::profile(size)` in [`include/mlp_params.hpp`](include/mlp_params.hpp) is the selector.
+block and do identical work. `mlp::pcmm::profile(size)` in
+[`include/mlp_params.hpp`](include/mlp_params.hpp) is the selector.
 
 | | sizes 1–2 (100, 1000) | size 3 (10000) |
 | --- | --- | --- |
@@ -69,9 +69,9 @@ block and do identical work.
 | Secret key | uniform ternary (hw = 0), sampled **directly** at 2^12 — no lifting | uniform ternary (hw = 0), sampled **directly** at 2^15 — no lifting |
 | Noise / SWK budget | σ = 3.2 / `maxBits128(12) = 106` bits, margin 5.0 | σ = 3.2 / `maxBits128(14) = 430` bits, margin 5.0 |
 
-`SIMPLE32` (32-bit RNS primes) halves the word size pcmm's GEMM backend operates on, at the cost of
-more primes for the same modulus budget. Both chains are sized against that trade, so neither is
-valid read back against a `GRAFTED` budget.
+`SIMPLE32` uses 32-bit RNS primes: smaller machine words for the GEMM, at the cost of more primes
+to reach the same modulus budget. Both chains are sized against that trade, so neither is valid
+read back against a `GRAFTED` budget.
 
 Note the first two rows differ: **coefficients per message is not images per message.** CI stores
 half the degree but packs one real image per stored coefficient; NORMAL stores the whole degree but
@@ -87,13 +87,13 @@ L0  +b2 (plaintext add, no level cost), decrypt
 ```
 
 One message holds 2048 images at sizes 1–2 and 16384 at size 3, so every shipped size is a single
-block; a batch beyond that would split into further *blocks* inside a single
-`ICtMatrix`, transparently. `x²` runs tensor → rescale → relin (not the usual tensor → relin →
-rescale), so the relin key is built at the *post-rescale* level.
+block; a batch beyond that splits into further *blocks* inside one ciphertext matrix,
+transparently. `x²` runs square → rescale → relinearize (not the usual square → relinearize →
+rescale), so the relinearization key is built at the *post-rescale* level.
 
 **Bias fold.** `b1` rides as an extra column of `U1` (`128×485`) against an appended ones-row in the
-packed input, so fc1's pcmm computes `W1·X + b1` directly. `b2` is *not* folded that way — it would
-carry the ones-row through `x²` and `fc2`, taking the contraction from 128 to 129 rows for one bias
+packed input, so fc1 computes `W1·X + b1` directly. `b2` is *not* folded that way — it would carry
+the ones-row through `x²` and `fc2`, taking the contraction from 128 to 129 rows for one bias
 vector — so it is added afterwards as a plaintext delta (its inverse DFT is one nonzero coefficient
 per block, which a zero-filled matrix already provides).
 
@@ -129,9 +129,9 @@ That constrains what each scheme can hoist into stage 3, and the two answers dif
 
 - **HS encodes its diagonals in stage 3.** The diagonal geometry is fixed (`fc1` 128×512, `fc2`
   128×128) and does not depend on the batch size — batch size only changes how many ciphertexts are
-  fed through — so stage 3 has everything it needs without knowing the instance. The encoding needs
-  no key material, and the encoded diagonals are serialized for stage 7 to pick up, so stage 7
-  skips what was the expensive half of its setup.
+  fed through. The encoding needs no key material, only the *shape* of the switching keys, and the
+  encoded diagonals are serialized for stage 7 to pick up, so stage 7 skips what was the expensive
+  half of its setup.
 - **PCMM encodes in stage 7.** Its weight encoding depends on the batch size, which stage 3 cannot
   know. This costs it little: PCMM's setup is ~50 ms either way, because it has no rotation keys to
   load.
@@ -258,11 +258,11 @@ Both schemes, same instances, same machine, same session, same sm_120 library (H
 2–3 by overriding `usePcmm`):
 
 > **The HS columns predate the size-0 parameter change** and were taken with HS at 2^17 under a
-> lifted key. HS now runs at 2^15, which packs 32 images per ciphertext instead of 128 and so needs
-> 4× as many ciphertexts for the same batch — strictly worse at these sizes, where its cost already
-> tracks ciphertext count almost exactly. The conclusion below therefore holds a fortiori, but the
-> HS numbers themselves are not the ones the current tree would produce and are kept only as the
-> comparison that motivated the split.
+> lifted key, where it packed 128 images per ciphertext. HS now runs at 2^15, which packs 32 and so
+> needs 4× as many ciphertexts for the same batch — strictly worse at these sizes, where its cost
+> already tracks ciphertext count almost exactly. The conclusion below therefore holds a fortiori,
+> but the HS numbers themselves are not the ones the current tree would produce and are kept only
+> as the comparison that motivated the split.
 
 | | HS stage 3 | HS eval | HS scored | PCMM stage 3 | PCMM eval | PCMM scored |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -279,11 +279,12 @@ into stage 3 took most of its cost out of the timed stage. **The split is theref
 stage 3 and by evaluation, not by the scored figure alone** — and by key material, which is a
 property of the scheme rather than of where the work is timed.
 
-The evaluation gap widens with batch size because the two scale differently: HS packs a fixed 128
-images per ciphertext, so 1000 images need 8 ciphertexts and 10000 need 79, and its cost tracks
-that count almost exactly (7.72 ms → 75.3 ms, ~10× for 10× the images). PCMM's GEMM amortizes over
-the batch instead (0.91 ms → 2.63 ms, 2.9× for the same 10×). This is why the split is on instance
-size rather than a tuning constant.
+The evaluation gap widens with batch size because the two scale differently: at the configuration
+these columns were taken under, HS packed a fixed 128 images per ciphertext, so 1000 images needed
+8 ciphertexts and 10000 needed 79, and its cost tracked that count almost exactly (7.72 ms →
+75.3 ms, ~10× for 10× the images). PCMM's GEMM amortizes over the batch instead (0.91 ms →
+2.63 ms, 2.9× for the same 10×). This is why the split is on instance size rather than a tuning
+constant.
 
 Two honest qualifications:
 
@@ -352,16 +353,17 @@ enforces today and what a review would have to ratify or replace.
 
 Both schemes are instantiated under one rule, applied independently per scheme:
 
-> For a secret sampled in a ring of degree N over the conjugate-invariant subring, the total
-> switching-key modulus `log2(P·Q)` must not exceed `maxBits128(log2(N) − 1)`, with a margin of 5
-> bits.
+> For a secret sampled in a ring of degree N, the total switching-key modulus `log2(P·Q)` must not
+> exceed `maxBits128` at the effective RLWE dimension — N in the plain ring, N/2 over the
+> conjugate-invariant subring — with a margin of 5 bits.
 
 Three parts to it:
 
 1. **Uniform-ternary secrets, `hw = 0`.** Neither scheme uses a sparse key.
-2. **The effective dimension is one octave below the ring.** On the conjugate-invariant subring only
-   half the coefficients are sampled, so a secret drawn at 2^k carries the RLWE problem of 2^(k−1) —
-   and the budget is read at that index, never at the ring's own degree.
+2. **CI costs one octave.** On the conjugate-invariant subring only half the coefficients are
+   sampled, so a secret drawn at 2^k carries the RLWE problem of 2^(k−1), and the budget is read at
+   that index rather than at the ring's own degree. In the plain ring (PCMM at sizes 1–2) the two
+   indices coincide.
 3. **The budget bounds the key modulus, not the level chain.** What must fit is `P·Q` for the
    largest switching key, which is the chain modulus at that key's level plus the temporary modulus
    used to switch. The level chain alone is always comfortably smaller.
@@ -378,27 +380,26 @@ samples at — there is no separate lifting argument to accept.
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | `maxBits128` | 106 | 214 | 430 | 868 | 1748 | 3523 |
 
-Entries for 2^13–2^15 come from the toolchain's own 128-bit policy; 2^16–2^17 cite ePrint 2024/463;
-2^12 was added for PCMM's ring. Any degree without an entry is rejected at key generation rather
-than defaulted — which is why the schemes cannot silently drop to an unbudgeted ring.
+The 2^16–2^17 entries follow ePrint 2024/463; the rest come from CryptoLab's internal 128-bit
+parameter policy and are provisional. Any degree without an entry is rejected at key generation
+rather than defaulted — which is why the schemes cannot silently drop to an unbudgeted ring.
 
 ### As instantiated
 
-| | HS (size 0) | PCMM (sizes 1–3) |
-| --- | --- | --- |
-| Ring N | 2^15 | 2^13 |
-| Effective RLWE dimension | 2^14 | 2^12 |
-| Secret | uniform ternary, `hw = 0`, σ = 3.2 | uniform ternary, `hw = 0`, σ = 3.2 |
-| **Budget `maxBits128`** | **430 bits** | **106 bits** |
-| Level chain | 30 + 3×25 ≈ 105 bits | 28 + 3×22 ≈ 94 bits |
-| Largest switching key (`P·Q`) | chain + temporary, well inside 430 | ~50-bit key modulus + temporary |
-| Margin | 5 bits | 5 bits |
+| | HS (size 0) | PCMM (sizes 1–2) | PCMM (size 3) |
+| --- | --- | --- | --- |
+| Ring N | 2^15, CI | 2^12, plain | 2^15, CI |
+| Effective RLWE dimension | 2^14 | 2^12 | 2^14 |
+| Secret | uniform ternary, `hw = 0`, σ = 3.2 | ← | ← |
+| **Budget `maxBits128`** | **430 bits** | **106 bits** | **430 bits** |
+| Level chain | 30 + 3×25 ≈ 105 bits | 34 + 3×24 ≈ 106 bits | 44 + 3×27 ≈ 125 bits |
+| Largest switching key (`P·Q`) | rotation keys at the top level (~105 bits) + temporary | relin key at a 58-bit level + temporary | relin key at a 71-bit level + temporary |
+| Margin | 5 bits | 5 bits | 5 bits |
 
-HS sits far inside its budget — the 2^15 ring buys 430 bits against a 105-bit chain. PCMM is the
-tighter of the two: its 106-bit budget is why its chain is 28 + 3×22 rather than HS's 30 + 3×25,
-and why its relinearization key is built after the rescale, at a single level, instead of across
-the whole chain. Both margins are enforced at key generation, which throws rather than silently
-producing an under-budget key.
+HS sits far inside its budget — the 2^15 ring buys 430 bits against a 105-bit chain. PCMM at sizes
+1–2 is the tighter of the three: its 106-bit budget is why its relinearization key is built after
+the rescale, at a single level, instead of across the whole chain. All margins are enforced at key
+generation, which throws rather than silently producing an under-budget key.
 
 ### What is still open
 
@@ -421,10 +422,9 @@ h ∈ {32, 64, 128, 192, 256, 512, 1024}. Both our schemes use `hw = 0`, i.e. a 
 
 Our values sit near its densest column without matching it (our 2^13 entry 214 equals its `h=1024`
 exactly; 2^14 is 430 vs 426; 2^15 is 868 vs 854), which is consistent with the two coming from
-different analyses rather than one being derived from the other. A dense key *is* at least as hard
-as an h=1024 one at the same (n, q), so reading off that column would be conservative — but that is
-an argument a reviewer accepts, not a citation, and the numeric drift shows they are not the same
-source.
+different analyses. A dense key *is* at least as hard as an h=1024 one at the same (n, q), so
+reading off that column would be conservative — but that is an argument a reviewer accepts, not a
+citation.
 
 Two coherent ways to close it — a decision, not an oversight:
 

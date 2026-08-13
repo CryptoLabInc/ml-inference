@@ -6,7 +6,7 @@
 //
 // mlp_pipeline.hpp - helpers shared by the seven stage executables: parameter
 // reconstruction, text/CSV I/O against the harness file formats, slot packing,
-// and the homomorphic layer.
+// and the Halevi-Shoup homomorphic layer.
 
 #ifndef MLP_PIPELINE_HPP_
 #define MLP_PIPELINE_HPP_
@@ -30,8 +30,9 @@ namespace mlp {
 heaan::Levels buildLevels();
 heaan::EnDecoder makeEncoder(const heaan::Levels &levels);
 
-// The MatrixVectorEval parameters for one layer. Shape-only: no weights, so
-// client_key_generation can call it to learn which rotation keys to make.
+// The matrix-vector evaluation parameters for one layer. Shape-only: no
+// weights, so client_key_generation can call it to learn which rotation keys
+// to make.
 heaan::MatrixVectorEvalParams makeMvParams(const LayerGeom &geom,
                                            const heaan::Levels &levels,
                                            u32 in_level,
@@ -40,9 +41,9 @@ heaan::MatrixVectorEvalParams makeMvParams(const LayerGeom &geom,
 // The switching-key parameters for one level. Carries no key material -- it is
 // the *shape* of a switching key, including the gadget decomposition that
 // diagonal encoding needs. client_key_generation builds its rotation keys from
-// this, and server_preprocess_model encodes diagonals against the same object,
-// so the two cannot drift: a gadget decomposition mismatch makes the encoded
-// diagonals unusable with the keys.
+// this and server_preprocess_model encodes diagonals against the same object,
+// so the two cannot drift: a mismatch makes the encoded diagonals unusable
+// with the keys.
 heaan::SwKeyGenParams makeSwkParams(const heaan::Levels &levels, u32 level);
 
 //===========================================================================
@@ -81,7 +82,8 @@ inline size_t slotOf(u32 coord, u32 img) {
 heaan::Message packImages(const std::vector<std::vector<double>> &images,
                           size_t first, size_t count);
 
-// The p diagonals of the layer matrix, in the layout MatrixVectorEval wants:
+// The p diagonals of the layer matrix, in the layout the matrix-vector
+// evaluation wants:
 //   res[i] = sum_d diags[d][i] * op[(i + d) % slots]
 // with d running over multiples of IMAGES_PER_CTXT. All p are kept, including
 // any that are all-zero -- see bsIndices/gsIndices in mlp_params.hpp.
@@ -99,9 +101,9 @@ heaan::Message buildBiasMessage(const LayerGeom &geom,
 
 struct Layer {
     bool activate = false;
-    // MatrixVectorEval holds a reference to the rotation keys and needs them
-    // to outlive it, so both sit behind a pointer and moving a Layer moves
-    // only the pointers.
+    // The matrix-vector evaluator holds a reference to the rotation keys and
+    // needs them to outlive it, so both sit behind a pointer and moving a
+    // Layer moves only the pointers.
     std::unique_ptr<heaan::RotKeyPtrs> rot_keys;
     std::unique_ptr<heaan::MatrixVectorEval> matvec;
     bool keyless_fold = false;
@@ -116,11 +118,10 @@ struct Layer {
 };
 
 // Encode a layer's diagonals, WITHOUT any key material. This is the expensive
-// half of building a layer (~4 s per layer at FC1's size), and it depends only
-// on the weights, the layer geometry and the level -- all fixed -- so
-// server_preprocess_model runs it and serializes the result. Encoding happens
-// on `dev` directly: the library does not guarantee that encoding on the CPU
-// and moving to a GPU afterwards gives bit-identical plaintexts.
+// half of building a layer, and it depends only on the weights, the layer
+// geometry and the level -- all fixed -- so server_preprocess_model runs it and
+// serializes the result. Encoding happens on `dev` directly, the device the
+// evaluation later runs on.
 heaan::MatrixVectorEvalEncoded encodeDiags(const LayerGeom &geom,
                                            const std::vector<double> &W,
                                            const heaan::Levels &levels,
@@ -129,7 +130,7 @@ heaan::MatrixVectorEvalEncoded encodeDiags(const LayerGeom &geom,
 // Assemble a layer on the server from loaded keys plus the pre-encoded
 // diagonals. `rot_keys` is consumed; `encoded` is shared, not copied, so it may
 // be destroyed afterwards. Only the bias is encoded here -- one message per
-// layer, which is negligible next to the diagonals.
+// layer, negligible next to the diagonals.
 // `fold_keys` is consumed too, and is required exactly when the layer folds
 // (q/p > 1) and the key-less path is unavailable -- i.e. whenever the secret
 // key is not lifted. Pass an empty RotKeyPtrs for a layer that does not fold.
@@ -149,20 +150,17 @@ void homLayer(heaan::Ptr<heaan::ICiphertext> &ct, const Layer &lyr,
 // Server-side model cache, and the instance marker.
 //
 // server_preprocess_model (stage 3) is invoked with NO arguments, so it cannot
-// tell which scheme the run will use -- and encoding the HS diagonals costs
-// ~8.4 s, which is pure waste on a PCMM instance. It cannot infer the size from
-// io/ either: the harness only clears the *current* instance's directory, so
-// stale ones from earlier runs sit alongside it.
+// tell which scheme the run will use -- and encoding the HS diagonals is
+// several seconds of pure waste on a PCMM instance. It cannot infer the size
+// from io/ either: the harness only clears the *current* instance's directory,
+// so stale ones from earlier runs sit alongside it.
 //
-// So the stage that does know writes it down. client_key_generation (stage 2.2)
-// receives <size> and always runs before stage 3, so it drops the instance size
-// here on its way past. This is our own pipeline passing a public,
-// already-known quantity between our own stages through our own build
-// directory -- not an inference about harness internals, and nothing about the
-// measurement changes: both schemes still do all of their own work.
-//
-// A missing or unreadable marker is not an error: stage 3 falls back to
-// preparing both schemes, which is what it did before this existed.
+// So the stage that does know writes it down: client_key_generation (stage
+// 2.2) receives <size> and always runs first. This is our own pipeline passing
+// a public, already-known quantity between our own stages; nothing about the
+// measurement changes, as both schemes still do all of their own work. A
+// missing or unreadable marker is not an error -- stage 3 then prepares both
+// schemes.
 //===========================================================================
 
 constexpr const char *MODEL_CACHE_DIR = "submissions/mnist/build/model_cache";

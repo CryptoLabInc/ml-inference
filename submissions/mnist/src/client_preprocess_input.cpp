@@ -12,8 +12,8 @@
 //      reference model applies in harness/mnist/test.py.
 //   2. center-crop 28x28 -> 22x22 (784 -> 484) -- the model was TRAINED on
 //      cropped input, so this is part of the model definition. It also halves
-//      the padded coordinate dimension, which is what fits 128 images per
-//      ciphertext instead of 64. See "The crop" in DESIGN.md.
+//      the padded coordinate dimension, which is what fits 32 images per
+//      ciphertext instead of 16. See "The crop" in DESIGN.md.
 
 #include "mlp_pipeline.hpp"
 
