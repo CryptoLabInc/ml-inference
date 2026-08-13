@@ -4,9 +4,10 @@
 // See the LICENSE.md file for details.
 //============================================================================
 //
-// mlp_pcmm.hpp - the PCMM (GEMM-based) inference scheme, used for medium and
-// large instances (see mlp::usePcmm). Written independently against HEaaN2's
-// public API; no HEaaN2 source is vendored. HEaaN2's own mlp/PCMM benchmark
+// mlp_pcmm.hpp - the PCMM (GEMM-based) inference scheme, used for the small,
+// medium and large instances (see mlp::usePcmm). Written independently
+// against HEaaN2's public API; no HEaaN2 source is vendored. Its own mlp/PCMM
+// benchmark
 // was read as a design reference for the algorithm -- the pcmm circuit for
 // this exact model, the section-6.3 coeff/slot relabeling trick, and the
 // bias-folded-into-a-weight-column layout are its ideas, reimplemented here
@@ -15,8 +16,9 @@
 //
 // Packing (opposite of the HS scheme in mlp_pipeline.hpp): feature = matrix
 // row (pcmm's contraction dimension), image = column/slot. One message holds
-// ringDim() images; a larger batch splits into further "blocks" inside a
-// single ICtMatrix, transparent to callers here.
+// slotsPerMsg() images; a larger batch splits into further "blocks" inside a
+// single ICtMatrix, transparent to callers here. Note slotsPerMsg() is not
+// ringDim() -- see their definitions in mlp_params.hpp.
 //
 // Bias: b1 rides along as an extra column of U1 against an appended
 // "ones" row in the packed input, so fc1's pcmm computes W1*X + b1 directly.
@@ -54,12 +56,18 @@ constexpr const char *RESULT_CTMATRIX_FILE = "cipher_result_matrix.bin";
 // same answer -- see the header comment of mlp_params.hpp.
 //===========================================================================
 
-heaan::Levels buildLevels();
+// Each of these takes the Profile its stage resolved from the instance size
+// (mlp::pcmm::profile(size)) -- large is tuned separately from small/medium,
+// see the Profile block in mlp_params.hpp. A stage passing a different profile
+// than its peers produces objects the others cannot read.
+heaan::Levels buildLevels(const Profile &p);
 
 // Weights, bias and (post relabel) decode all use the coefficient encoder;
 // only the input's initial encode uses the slot encoder. See setDFT().
-heaan::EnDecoder makeCoeffEncoder(const heaan::Levels &levels);
-heaan::EnDecoder makeSlotEncoder(const heaan::Levels &levels);
+heaan::EnDecoder makeCoeffEncoder(const heaan::Levels &levels,
+                                  const Profile &p);
+heaan::EnDecoder makeSlotEncoder(const heaan::Levels &levels,
+                                 const Profile &p);
 
 //===========================================================================
 // Packing
@@ -68,12 +76,12 @@ heaan::EnDecoder makeSlotEncoder(const heaan::Levels &levels);
 // Pack a batch of already-cropped, already-normalized images (INPUT_DIM
 // values each, row-major, in the format client_preprocess_input writes) into
 // the [IN_P x n_cols] matrix pcmm consumes: row r holds feature r across
-// every image, image i lands in column (i / ringDim()) * (1 << LOG_DEGREE) +
-// (i % ringDim()), and the trailing IN_P-1 row is a constant 1 (the bias
-// carrier). Width uses the client-side stored-coefficient count
-// (1 << LOG_DEGREE) per block, not numCols() -- see encodeMatrix().
+// every image, image i lands in column (i / slotsPerMsg(p)) * (1 <<
+// p.log_degree) + (i % slotsPerMsg(p)), and the trailing IN_P-1 row is a
+// constant 1 (the bias carrier). Width uses the client-side stored-coefficient
+// count (1 << p.log_degree) per block, not numCols() -- see encodeMatrix().
 heaan::Matrix<heaan::Real>
-packImages(const std::vector<std::vector<double>> &images);
+packImages(const std::vector<std::vector<double>> &images, const Profile &p);
 
 // Encode a Matrix<Real> into an IPtMatrix at the given level. Used for the
 // input (through the slot encoder) and for weights/bias (through the
@@ -114,7 +122,8 @@ Model buildModel(const std::vector<std::vector<double>> &W1,
                  const std::vector<double> &b1,
                  const std::vector<std::vector<double>> &W2,
                  const std::vector<double> &b2, const heaan::EnDecoder &coeff,
-                 const heaan::Levels &levels, u32 num_images);
+                 const heaan::Levels &levels, u32 num_images,
+                 const Profile &p);
 
 //===========================================================================
 // Client-side key material: only a relinearization key -- pcmm needs no
@@ -123,7 +132,7 @@ Model buildModel(const std::vector<std::vector<double>> &W1,
 
 heaan::Ptr<heaan::ISwKey> genRelinKey(const heaan::ISecretKey &sk,
                                       const heaan::Levels &levels,
-                                      double swk_margin);
+                                      const Profile &p);
 
 //===========================================================================
 // The section-6.3 relabeling bridge: flips only the DFT metadata flag on an
@@ -131,10 +140,10 @@ heaan::Ptr<heaan::ISwKey> genRelinKey(const heaan::ISecretKey &sk,
 // setDFT of its own, so this goes through a BatchRLWE ICiphertext bridge.
 // `num_images` is needed to recompute the column count in the target
 // labeling (coeff- and slot-encoded columns are counted in different units
-// under CI; see mlp_pcmm.cpp).
+// under CI, and coincide under NORMAL; see mlp_pcmm.cpp).
 //===========================================================================
 
-void setDFT(heaan::ICtMatrix &ct, bool dft, u32 num_images);
+void setDFT(heaan::ICtMatrix &ct, bool dft, u32 num_images, const Profile &p);
 
 //===========================================================================
 // ICtMatrix <-> file. Bridges through the same BatchRLWE ICiphertext that
@@ -156,7 +165,7 @@ heaan::Ptr<heaan::ICtMatrix> loadCtMatrix(const std::string &path, u32 rows,
 
 void inference(const Model &model, const heaan::ISwKey &relin_key,
                const heaan::ICtMatrix &cx, heaan::ICtMatrix &cy,
-               const heaan::Levels &levels, u32 num_images);
+               const heaan::Levels &levels, u32 num_images, const Profile &p);
 
 //===========================================================================
 // Client-side output unpacking: the reverse of packImages. `yc` is the
@@ -166,7 +175,7 @@ void inference(const Model &model, const heaan::ISwKey &relin_key,
 //===========================================================================
 
 std::vector<std::vector<double>> unpackLogits(const heaan::Matrix<heaan::Real> &yc,
-                                              u32 num_images);
+                                              u32 num_images, const Profile &p);
 
 } // namespace mlp::pcmm
 

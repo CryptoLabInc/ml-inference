@@ -66,10 +66,11 @@ void runHS(const InstanceParams &prms, Device dev) {
               << " images into " << n_ct << " ciphertext(s)\n";
 }
 
-void runPcmm(const InstanceParams &prms, Device dev) {
-    const Levels levels = pcmm::buildLevels();
+void runPcmm(const InstanceParams &prms, Device dev, InstanceSize size) {
+    const auto prof = pcmm::profile(size);
+    const Levels levels = pcmm::buildLevels(prof);
     const u32 top = levels.top();
-    const EnDecoder slot_encoder = pcmm::makeSlotEncoder(levels);
+    const EnDecoder slot_encoder = pcmm::makeSlotEncoder(levels, prof);
     EnDecryptor encryptor{EncryptParams{DiscreteGaussian(NOISE_STDDEV)}};
 
     auto sk = serial::loadAsPtr<ISecretKey>(
@@ -82,14 +83,14 @@ void runPcmm(const InstanceParams &prms, Device dev) {
         throw std::runtime_error("preprocessed input size does not match "
                                  "instance batch size");
 
-    auto x = pcmm::packImages(images);
+    auto x = pcmm::packImages(images, prof);
     auto px = pcmm::encodeMatrix(slot_encoder, x, top);
 
     auto cx = ICtMatrix::make();
     encryptor.encrypt(*px, *sk, *cx); // r_ntt=false -> coeff domain
     // section 6.3: relabel as coefficient-encoded before it ever reaches
     // pcmm on the server (pcmm rejects operands whose dft flag is set).
-    pcmm::setDFT(*cx, /*dft=*/false, num_images);
+    pcmm::setDFT(*cx, /*dft=*/false, num_images, prof);
 
     fs::create_directories(prms.ctxtupdir());
     pcmm::saveCtMatrix(
@@ -107,7 +108,7 @@ int main(int argc, char *argv[]) try {
     const Device dev = targetDevice();
 
     if (usePcmm(size))
-        runPcmm(prms, dev);
+        runPcmm(prms, dev, size);
     else
         runHS(prms, dev);
 

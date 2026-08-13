@@ -2,29 +2,29 @@
   "model_name": "mlp",
   "dataset_name": "mnist",
   "Timing": {
-    "Test dataset generation": "3.7398s",
-    "Key Generation": "0.1406s",
-    "Encrypted model preprocessing": "0.0711s",
-    "Input generation": "3.7485s",
-    "Input preprocessing": "1.5584s",
-    "Input encryption": "3.2139s",
-    "Encrypted computation": "0.5779s",
-    "Result decryption": "0.3799s",
-    "Result postprocessing": "0.0985s",
-    "Harness: Run inference for harness plaintext model": "2.7289s",
-    "Harness: Run quality check": "0.0042s",
-    "Total": "16.2617s"
+    "Test dataset generation": "3.9803s",
+    "Key Generation": "0.067s",
+    "Encrypted model preprocessing": "0.0678s",
+    "Input generation": "3.9868s",
+    "Input preprocessing": "1.5315s",
+    "Input encryption": "2.93s",
+    "Encrypted computation": "0.5131s",
+    "Result decryption": "0.3411s",
+    "Result postprocessing": "0.0776s",
+    "Harness: Run inference for harness plaintext model": "3.0047s",
+    "Harness: Run quality check": "0.0054s",
+    "Total": "16.5052s"
   },
   "Bandwidth": {
-    "Public and evaluation keys": "54.0K",
-    "Encrypted input": "133.6M",
-    "Encrypted results": "840.1K"
+    "Public and evaluation keys": "320.5K",
+    "Encrypted input": "242.5M",
+    "Encrypted results": "1.8M"
   },
   "Quality": {
     "Encrypted model quality": {
-      "correct_predictions": 9793,
+      "correct_predictions": 9796,
       "total_samples": 10000,
-      "accuracy": 0.9793
+      "accuracy": 0.9796
     },
     "Harness model quality": {
       "correct_predictions": 9779,
@@ -33,9 +33,9 @@
     }
   },
   "Server Reported": {
-    "Model setup (key load + diagonal/weight encoding)": "0.050792s",
-    "Warm-up (one discarded inference pass)": "0.033212s",
-    "Encrypted computation": "0.002628s",
-    "Total": "0.086633s"
+    "Model setup (key load + diagonal/weight encoding)": "0.054719s",
+    "Warm-up (one discarded inference pass)": "0.01201s",
+    "Encrypted computation": "0.003382s",
+    "Total": "0.070111s"
   }
 }
