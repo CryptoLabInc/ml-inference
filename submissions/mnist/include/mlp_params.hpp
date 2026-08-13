@@ -56,10 +56,11 @@ constexpr u32 LABEL_DIM = 10;
 // this at its own entry point; see mlp_pcmm.hpp for the PCMM-side parameters.
 //
 // small sits on PCMM because pcmm::numBlocks() is 1 for every batch up to
-// pcmm::ringDim() (4096): 100 images and 1000 images do *identical* work, so
-// small inherits medium's cost outright -- against HS it drops the rotation
-// keys entirely (175 MB -> 60 KB of public key material) and skips the
-// diagonal encoding. single stays on HS: it is the one size where the
+// pcmm::slotsPerMsg() (2048 under the profile small and medium share): 100
+// images and 1000 images do *identical* work, so small inherits medium's cost
+// outright -- against HS it drops the rotation keys entirely (175 MB -> 110 KB
+// of public key material) and skips the diagonal encoding. single stays on HS:
+// it is the one size where the
 // key-less fold and public-key encryption are exercised, and PCMM's matrix
 // encrypt is necessarily symmetric-key (see runPcmm in
 // client_key_generation.cpp).
@@ -143,8 +144,9 @@ constexpr double NOISE_STDDEV = 3.2;
 // keyed by RLWE dimension. 2^12..2^15 from HEaven's maxBitsPolicy128(); 2^16
 // and 2^17 from ePrint 2024/463. The entries are hw-specific -- do not
 // substitute a value from an hw > 0 table. Shared by both the HS layer scheme
-// (which uses 13..17) and the PCMM scheme in mlp_pcmm.hpp (which needs 12,
-// its minimum viable ring): one table, so a review only edits it once.
+// (which uses 13..17) and the PCMM scheme in mlp_pcmm.hpp (which needs 12 for
+// the small/medium profile and 14 for large): one table, so a review only
+// edits it once.
 inline u32 maxBits128(u32 log_degree) {
     switch (log_degree) {
     case 12: return 106;
@@ -290,23 +292,63 @@ inline size_t numCtxts(size_t n) {
 
 namespace pcmm {
 
-// Conjugate-invariant, same as the HS scheme, and for the same reason: the
-// model and the input are real-valued. GRAFTED matches the HS scheme's ring
-// type so both schemes' ciphertexts/keys use the same word representation
-// (not that any object is ever shared between them -- each instance size
-// picks one scheme and stays in it -- but it keeps the two schemes'
-// parameter blocks easy to compare).
-constexpr heaan::NTTAlgorithm NTT_ALG = heaan::NTTAlgorithm::CYC_FOR_CI;
-constexpr heaan::PolyType POLY_TYPE = heaan::PolyType::GRAFTED;
+//---------------------------------------------------------------------------
+// Tuning profile.
+//
+// The batch size decides how many blocks a matrix row splits into, and that in
+// turn decides which ring, which degree and which modulus chain come out
+// cheapest -- so one setting cannot be right for every instance size. What
+// differs lives in this struct; everything below it is shared.
+//
+// Two profiles, not three: small (100) and medium (1000) both fit a single
+// block, so they do identical work and share one setting, exactly as the
+// usePcmm() comment above describes. Large (10000) is tuned on its own.
+//---------------------------------------------------------------------------
 
-// Smallest ring with both (a) a valid 128-bit table entry (maxBits128 has no
-// entry below RLWE dimension 2^12) and (b) enough coefficients per message to
-// be worth the fixed cost of a pcmm call. Fixed across medium and large: pcmm
-// work is proportional to total stored coefficients (blocks * ringDim), and
-// for this batch range that total is lower at 2^13 with more, smaller blocks
-// than at a larger ring with fewer, larger ones -- see ringDim()/numBlocks().
-constexpr u32 LOG_DEGREE = 13;
-constexpr u32 LOG_RLWE_DIM = LOG_DEGREE - 1; // CI halves it: 12
+struct Profile {
+    heaan::NTTAlgorithm ntt_alg;
+    heaan::PolyType poly_type;
+    u32 log_degree;
+    u32 base_bits;
+    u32 rescale_bits;
+};
+
+// SIMPLE32 (32-bit RNS primes) on both: it halves the word size pcmm's GEMM
+// backend operates on, at the cost of more primes to reach the same modulus
+// budget. Both chains below are sized against that trade, so neither is valid
+// read back against a GRAFTED budget.
+
+// --- small (100) and medium (1000) -----------------------------------------
+// One NORMAL message at N=2^12 holds 2^11 = 2048 images, so either batch fits
+// a single block already. CI's doubled slot count would remove no block here
+// and only costs constant factors, which is why these sizes use the plain ring
+// while large does not. Under NORMAL the RLWE dimension is the degree itself
+// -- 2^12, the same 128-bit budget entry (106 bits) the CI N=2^13 setting this
+// replaces was keyed by, so the security question is unchanged.
+constexpr Profile MEDIUM_PROFILE{heaan::NTTAlgorithm::NORMAL,
+                                 heaan::PolyType::SIMPLE32,
+                                 /*log_degree=*/12,
+                                 /*base_bits=*/34,
+                                 /*rescale_bits=*/24};
+
+// --- large (10000) ---------------------------------------------------------
+// CI packs twice the images per stored coefficient, and at this batch that is
+// what removes blocks: 2^14 real slots per message take all 10000 images in
+// one. Under CI the RLWE dimension is half the degree -- 2^14, a 430-bit
+// budget, which is what lets this chain be wider than medium's.
+constexpr Profile LARGE_PROFILE{heaan::NTTAlgorithm::CYC_FOR_CI,
+                                heaan::PolyType::SIMPLE32,
+                                /*log_degree=*/15,
+                                /*base_bits=*/44,
+                                /*rescale_bits=*/27};
+
+// Every PCMM stage resolves its parameters through this one call, from the
+// instance size it was invoked with. A stage that resolves a different profile
+// than its peers produces objects the others cannot read -- see the header
+// comment at the top of this file.
+constexpr Profile profile(InstanceSize size) {
+    return size == InstanceSize::LARGE ? LARGE_PROFILE : MEDIUM_PROFILE;
+}
 
 // IN_DIM padded to a rows x cols GEMM contraction; +1 row folds b1 in as an
 // extra weight column against an appended "ones" row (see mlp_pcmm.hpp).
@@ -316,24 +358,29 @@ constexpr u32 IN_P = INPUT_DIM + 1; // 485
 // SECURITY-RELEVANT PARAMETERS -- ANALYSIS PENDING, same status as the HS
 // scheme's block above and the same open item in DESIGN.md section 5. Unlike
 // HS, PCMM's secret key is sampled directly at its working degree (no
-// lifting), so its security rests on maxBits128(LOG_RLWE_DIM) alone with no
-// separate lifting argument to review.
+// lifting), so its security rests on maxBits128(logRlweDim(profile)) alone
+// with no separate lifting argument to review.
+//
+// The budget each profile's chain is sized against:
+//   small/medium  NORMAL N=2^12 -> RLWE dim 2^12 -> 106 bits
+//   large         CI     N=2^15 -> RLWE dim 2^14 -> 430 bits
+//
+// What the two ends of base_bits/rescale_bits are:
+//   lower -- the bottom modulus (base_bits - rescale_bits) has to clear the
+//     iDFT coefficient range of the fc2 output (not the logit range itself,
+//     but its inverse DFT, whose max coefficient magnitude is materially
+//     larger), or one wrapped coefficient smears error across a whole message
+//     and collapses accuracy batch-wide.
+//   upper -- the relin key. x^2 runs tensor -> rescale -> relin, so the key's
+//     modulus is a single prime of base_bits + rescale_bits bits (not
+//     base + 2*rescale), and the gadget builder refuses unless the budget
+//     above admits it with margin.
+// Both settings were chosen by measurement under SIMPLE32; see HEaaN2 PR #222
+// for the accuracy sweeps behind them.
 //---------------------------------------------------------------------------
 
 constexpr u32 HW = 0; // uniform ternary, same as the HS scheme
 constexpr double SWK_MARGIN = 5.0;
-
-// Bottom modulus BASE_BITS - RESCALE_BITS has to clear the iDFT coefficient
-// range of the fc2 output (not the logit range itself -- its inverse DFT,
-// whose max coefficient magnitude is materially larger), or one wrapped
-// coefficient smears error across the whole message. The upper bound is the
-// relin key: x^2 runs tensor -> rescale -> relin, so the key's modulus is one
-// prime of BASE_BITS + RESCALE_BITS bits, and the gadget builder refuses
-// unless that fits within maxBits128(LOG_RLWE_DIM) with margin. 28/22 clears
-// both ends (50-bit key modulus, 6 bits of chain headroom) against the
-// 106-bit budget at LOG_RLWE_DIM=12.
-constexpr u32 BASE_BITS = 28;
-constexpr u32 RESCALE_BITS = 22;
 constexpr u32 NUM_MULTS = 3; // fc1, x^2, fc2 -- one rescale each
 
 // Level schedule, one rescale per operation, offsets below the top level:
@@ -350,20 +397,39 @@ constexpr u32 SQUARE_OUT_DROP = 2; // relin key lives at this level
 constexpr u32 FC2_IN_DROP = 2, FC2_OUT_DROP = 3;
 constexpr u32 B2_DROP = 3; // b2 is added at fc2's output level, no change
 
-// Coefficients one message actually stores: the whole block in the NORMAL
-// ring, half of it (CI's free half) in the conjugate-invariant one.
-inline u32 ringDim() { return 1U << LOG_RLWE_DIM; } // == 1 << (LOG_DEGREE - 1)
+// The RLWE dimension the 128-bit budget is keyed by: the ring degree itself in
+// NORMAL, half of it in the conjugate-invariant subring (CI samples only its
+// free half). Numerically this is also the count below, but the two are
+// different quantities and only this one belongs in maxBits128.
+constexpr u32 logRlweDim(const Profile &p) {
+    return p.ntt_alg == heaan::NTTAlgorithm::CYC_FOR_CI ? p.log_degree - 1
+                                                        : p.log_degree;
+}
 
-// A message holds ringDim() images; a batch bigger than that splits into
-// further blocks within one ICtMatrix.
-inline u32 numBlocks(u32 num_images) {
-    return (num_images + ringDim() - 1) / ringDim();
+// Coefficients one coeff-encoded block actually stores: the whole block in the
+// NORMAL ring, half of it in CI. Matches ringDim() in HEaaN2's
+// src/HomEvalMatrix.cpp, which the server-side column count has to agree with.
+constexpr u32 ringDim(const Profile &p) { return 1U << logRlweDim(p); }
+
+// Images one message holds. This is degree/2 in BOTH rings -- NORMAL has N/2
+// complex slots, CI has N/2 real ones -- so it is NOT ringDim(p), which they
+// differ in. The two coincide under CI only, which is why a CI-only version of
+// this file could get away with a single constant for both.
+constexpr u32 slotsPerMsg(const Profile &p) { return 1U << (p.log_degree - 1); }
+
+// A batch bigger than one message splits into further blocks within one
+// ICtMatrix. Blocks are counted in images, hence slotsPerMsg, not ringDim.
+constexpr u32 numBlocks(const Profile &p, u32 num_images) {
+    return (num_images + slotsPerMsg(p) - 1) / slotsPerMsg(p);
 }
 
 // Server-side ICtMatrix/IPtMatrix column count: stored coefficients, i.e.
 // blocks * ringDim() -- NOT the client-side Matrix<Real> width, which is
-// blocks * (1 << LOG_DEGREE). See the packing note in mlp_pcmm.hpp.
-inline u32 numCols(u32 num_images) { return numBlocks(num_images) * ringDim(); }
+// blocks * (1 << log_degree). Under CI the two genuinely differ; under NORMAL
+// they happen to coincide. See the packing note in mlp_pcmm.hpp.
+constexpr u32 numCols(const Profile &p, u32 num_images) {
+    return numBlocks(p, num_images) * ringDim(p);
+}
 
 } // namespace pcmm
 

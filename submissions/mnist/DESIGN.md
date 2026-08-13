@@ -53,12 +53,31 @@ matvec's giant steps instead, which double-hoisted BSGS accumulates behind a sin
 Feature = ciphertext **row** (the GEMM contraction dimension), image = **column/slot** — the
 opposite convention from HS.
 
-| | |
-| --- | --- |
-| Ring | N = 2^13, CI subring, 4096 coefficients/message |
-| Modulus chain | 28 + 3×22 ≈ 94 bits, 4 levels, no bootstrapping |
-| Secret key | uniform ternary (hw = 0), sampled directly at 2^13 |
-| Noise / SWK budget | σ = 3.2 / `maxBits128(12) = 106` bits, margin 5.0 |
+Sizes 1–2 and size 3 are **tuned separately**. The batch size decides how many blocks a matrix row
+splits into, and that in turn decides which ring and which modulus chain come out cheapest, so one
+setting cannot be right for every size. Sizes 1 and 2 share one profile because both fit a single
+block and do identical work.
+`mlp::pcmm::profile(size)` in [`include/mlp_params.hpp`](include/mlp_params.hpp) is the selector.
+
+| | sizes 1–2 (100, 1000) | size 3 (10000) |
+| --- | --- | --- |
+| Ring | N = 2^12, **NORMAL**, `SIMPLE32` | N = 2^15, **CI subring**, `SIMPLE32` |
+| Coefficients / message | 4096 (the full degree) | 16384 (CI's free half) |
+| Images / message | 2048 | 16384 |
+| Blocks per row | 1 | 1 |
+| Modulus chain | 34 + 3×24 ≈ 106 bits, 4 levels, no bootstrapping | 44 + 3×27 ≈ 125 bits, 4 levels, no bootstrapping |
+| Secret key | uniform ternary (hw = 0), sampled **directly** at 2^12 — no lifting | uniform ternary (hw = 0), sampled **directly** at 2^15 — no lifting |
+| Noise / SWK budget | σ = 3.2 / `maxBits128(12) = 106` bits, margin 5.0 | σ = 3.2 / `maxBits128(14) = 430` bits, margin 5.0 |
+
+`SIMPLE32` (32-bit RNS primes) halves the word size pcmm's GEMM backend operates on, at the cost of
+more primes for the same modulus budget. Both chains are sized against that trade, so neither is
+valid read back against a `GRAFTED` budget.
+
+Note the first two rows differ: **coefficients per message is not images per message.** CI stores
+half the degree but packs one real image per stored coefficient; NORMAL stores the whole degree but
+packs images into its N/2 complex slots. The two coincide under CI only, which is why
+[`mlp_params.hpp`](include/mlp_params.hpp) keeps `ringDim()` and `slotsPerMsg()` as separate
+functions.
 
 ```
 L3  encrypt X, encode U1 → fc1 GEMM + rescale → L2
@@ -67,10 +86,10 @@ L1  encode U2 → fc2 GEMM + rescale            → L0
 L0  +b2 (plaintext add, no level cost), decrypt
 ```
 
-One message holds 4096 images; larger batches split into further *blocks* within a single encrypted
-matrix. The squaring runs square → rescale → relinearize rather than the more usual
-square → relinearize → rescale, so the relinearization key is built at the *post-rescale* level —
-which is why its modulus is one level's worth rather than the whole chain's.
+One message holds 2048 images at sizes 1–2 and 16384 at size 3, so every shipped size is a single
+block; a batch beyond that would split into further *blocks* inside a single
+`ICtMatrix`, transparently. `x²` runs tensor → rescale → relin (not the usual tensor → relin →
+rescale), so the relin key is built at the *post-rescale* level.
 
 **Bias fold.** `b1` rides as an extra column of `U1` (`128×485`) against an appended ones-row in the
 packed input, so fc1's pcmm computes `W1·X + b1` directly. `b2` is *not* folded that way — it would
@@ -284,7 +303,11 @@ Two honest qualifications:
   `Encrypted computation` was honest throughout.
 - **PCMM's encrypted input is larger**, not smaller (44.5 M vs 13.1 M at size 2; 133.6 M vs 129.6 M
   at size 3, where the gap nearly closes). It wins on compute and key material, and loses on upload
-  bandwidth — most visibly at size 2.
+  bandwidth — most visibly at size 2. **The per-size tuning widened that gap deliberately**: the
+  new chains are 106 and 125 bits against the 94 these figures were taken at, which buys evaluation
+  time and costs upload. On the development box the same trade showed size 2's input at 51.2 M
+  against 44.5 M, and size 3's at 242.5 M against 133.6 M. Bandwidth is reported by the harness
+  alongside timing, so this is a real cost, not an accounting artefact.
 
 ### Where HS's setup goes
 

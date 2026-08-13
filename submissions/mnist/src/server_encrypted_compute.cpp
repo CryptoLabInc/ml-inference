@@ -170,11 +170,12 @@ StageTimes runHS(const InstanceParams &prms, Device dev) {
     return tm;
 }
 
-StageTimes runPcmm(const InstanceParams &prms, Device dev) {
+StageTimes runPcmm(const InstanceParams &prms, Device dev, InstanceSize size) {
     const Timer t_setup;
 
-    const Levels levels = pcmm::buildLevels();
-    const EnDecoder coeff_encoder = pcmm::makeCoeffEncoder(levels);
+    const auto prof = pcmm::profile(size);
+    const Levels levels = pcmm::buildLevels(prof);
+    const EnDecoder coeff_encoder = pcmm::makeCoeffEncoder(levels, prof);
     const auto num_images = static_cast<u32>(prms.getBatchSize());
 
     auto relin_key = serial::loadAsPtr<ISwKey>(
@@ -183,7 +184,8 @@ StageTimes runPcmm(const InstanceParams &prms, Device dev) {
     const auto raw =
         pcmm::readRawModel(std::string(CACHE_DIR) + "/pcmm.bin");
     const auto model = pcmm::buildModel(raw.W1, raw.b1, raw.W2, raw.b2,
-                                        coeff_encoder, levels, num_images);
+                                        coeff_encoder, levels, num_images,
+                                        prof);
 
     StageTimes tm;
     tm.setup_s = t_setup.seconds();
@@ -191,20 +193,21 @@ StageTimes runPcmm(const InstanceParams &prms, Device dev) {
     fs::create_directories(prms.ctxtdowndir());
     auto cx = pcmm::loadCtMatrix(
         (prms.ctxtupdir() / pcmm::INPUT_CTMATRIX_FILE).string(), pcmm::IN_P,
-        pcmm::numCols(num_images), dev);
+        pcmm::numCols(prof, num_images), dev);
 
     // Warm-up: same inference on the real input (which inference() does not
     // modify), result discarded.
     {
         const Timer t_warm;
         auto warm = ICtMatrix::make();
-        pcmm::inference(model, *relin_key, *cx, *warm, levels, num_images);
+        pcmm::inference(model, *relin_key, *cx, *warm, levels, num_images,
+                        prof);
         tm.warmup_s = t_warm.seconds();
     }
 
     const Timer t_eval;
     auto cy = ICtMatrix::make();
-    pcmm::inference(model, *relin_key, *cx, *cy, levels, num_images);
+    pcmm::inference(model, *relin_key, *cx, *cy, levels, num_images, prof);
     tm.eval_s = t_eval.seconds();
 
     pcmm::saveCtMatrix(
@@ -223,7 +226,8 @@ int main(int argc, char *argv[]) try {
     const InstanceParams prms(size);
     const Device dev = targetDevice();
 
-    const StageTimes tm = usePcmm(size) ? runPcmm(prms, dev) : runHS(prms, dev);
+    const StageTimes tm =
+        usePcmm(size) ? runPcmm(prms, dev, size) : runHS(prms, dev);
 
     std::ofstream json(prms.server_reported_steps_file());
     json << std::fixed << std::setprecision(6) << "{\n"

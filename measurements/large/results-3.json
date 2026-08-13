@@ -2,29 +2,29 @@
   "model_name": "mlp",
   "dataset_name": "mnist",
   "Timing": {
-    "Test dataset generation": "3.7398s",
-    "Key Generation": "0.1406s",
-    "Encrypted model preprocessing": "0.0711s",
-    "Input generation": "3.7543s",
-    "Input preprocessing": "1.5583s",
-    "Input encryption": "3.2072s",
-    "Encrypted computation": "0.6005s",
-    "Result decryption": "0.3769s",
-    "Result postprocessing": "0.1357s",
-    "Harness: Run inference for harness plaintext model": "2.854s",
-    "Harness: Run quality check": "0.004s",
-    "Total": "16.4424s"
+    "Test dataset generation": "3.9803s",
+    "Key Generation": "0.067s",
+    "Encrypted model preprocessing": "0.0678s",
+    "Input generation": "4.0446s",
+    "Input preprocessing": "1.5324s",
+    "Input encryption": "2.9623s",
+    "Encrypted computation": "0.5149s",
+    "Result decryption": "0.3245s",
+    "Result postprocessing": "0.074s",
+    "Harness: Run inference for harness plaintext model": "2.987s",
+    "Harness: Run quality check": "0.006s",
+    "Total": "16.5608s"
   },
   "Bandwidth": {
-    "Public and evaluation keys": "54.0K",
-    "Encrypted input": "133.6M",
-    "Encrypted results": "840.1K"
+    "Public and evaluation keys": "320.5K",
+    "Encrypted input": "242.5M",
+    "Encrypted results": "1.8M"
   },
   "Quality": {
     "Encrypted model quality": {
-      "correct_predictions": 9798,
+      "correct_predictions": 9796,
       "total_samples": 10000,
-      "accuracy": 0.9798
+      "accuracy": 0.9796
     },
     "Harness model quality": {
       "correct_predictions": 9779,
@@ -33,9 +33,9 @@
     }
   },
   "Server Reported": {
-    "Model setup (key load + diagonal/weight encoding)": "0.054101s",
-    "Warm-up (one discarded inference pass)": "0.036385s",
-    "Encrypted computation": "0.002634s",
-    "Total": "0.09312s"
+    "Model setup (key load + diagonal/weight encoding)": "0.0562s",
+    "Warm-up (one discarded inference pass)": "0.012138s",
+    "Encrypted computation": "0.003396s",
+    "Total": "0.071735s"
   }
 }
