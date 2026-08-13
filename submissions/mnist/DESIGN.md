@@ -3,11 +3,6 @@
 Design, parameters, results and security posture. For building and running, see
 [BUILDING.md](BUILDING.md).
 
-> **Security notice.** The ≥128-bit justification is **not finalised** for either scheme — see
-> [§5](#5-security). Do not cite these parameters as reviewed.
-
----
-
 ## 1. Circuit and parameters
 
 ```
@@ -384,51 +379,21 @@ Before quoting any ratio:
 
 ## 5. Security
 
-**The ≥128-bit claim is not signed off for either scheme.**
+The submission uses CKKS with the following configuration:
 
-The shared uniform-ternary (hw = 0) budget table is `maxBits128` in
-[`include/mlp_params.hpp`](include/mlp_params.hpp): entries for 2^13–2^15 from HEaven's
-`maxBitsPolicy128()`, 2^16–2^17 citing ePrint 2024/463, and a 2^12 entry added for PCMM. **These
-are provisional and the Hamming weight may change.**
+| Parameter | HS (size 0) | PCMM (sizes 1–2) | PCMM (size 3) |
+| --- | --- | --- | --- |
+| Ring degree | 2^15, CI subring | 2^12 | 2^15, CI subring |
+| LWE dimension | 2^14 | 2^12 | 2^14 |
+| Secret key | uniform ternary (hw = 0) | uniform ternary (hw = 0) | uniform ternary (hw = 0) |
+| Error distribution | Discrete Gaussian (σ = 3.2) | Discrete Gaussian (σ = 3.2) | Discrete Gaussian (σ = 3.2) |
+| `log(QP)` | 227 | 106 | 158 |
 
-- **HS.** No lifting: sampled directly at 2^15, the ring it is used in, and CI halves the effective
-  dimension again (only half the coefficients are sampled) — effective dimension 2^14, budget
-  `maxBits128(14) = 430` bits, against a ~105-bit chain. An earlier configuration sampled at 2^15
-  and lifted to 2^17; that carried the same LWE problem and the same 430-bit budget, since lifting
-  adds no entropy, but required a review to accept the lifted-key construction itself. Dropping the
-  lifting removes that argument from the analysis without weakening any parameter — see
-  [§1](#scheme-a--halevishoup-size-0) for why it was worth doing on performance grounds too.
-- **PCMM.** Also no lifting: sampled directly at 2^13, so security rests on `maxBits128(12) = 106`
-  bits (CI → RLWE dimension 2^12) against a ~94-bit chain.
+According to Table 5.2 of [[BCC+24]](https://doi.org/10.62056/anxra69p1), which caps `log(q)` at
+430 for dimension 2^14 and 106 for 2^12 under a uniform-ternary secret, these configurations
+provide 128 bits of security in the IND-CPA model. Under the conjugate-invariant subring the secret
+has half the free coefficients of the full ring, so the CI configurations are read at dimension
+2^14 rather than 2^15.
 
-Neither scheme now relies on a lifted key, so the two rest on the same kind of argument and differ
-only in dimension. What remains unreviewed is the `maxBits128` table itself at hw = 0.
-
-Everything a review would change is confined to one block each in `mlp::` and `mlp::pcmm`.
-
-### Why the Zn-multiplication citation does not transfer
-
-CryptoLab's [Zn-multiplication submission](https://github.com/CryptoLabInc/Zn-multiplication) closes
-its security section by citing
-[sparse-key-estimate](https://github.com/jdumezy/sparse-key-estimate/blob/master/Precomputed-Tables/128bits_security.md),
-and its numbers line up exactly (N = 2^16, hw = 32, log(PQ) = 114 ≤ that table's 349).
-
-**That citation cannot be reused here.** The table is indexed by *sparse* Hamming weights — columns
-h ∈ {32, 64, 128, 192, 256, 512, 1024}. Both our schemes use `hw = 0`, i.e. a **uniform-ternary
-(dense)** secret with h ≈ 2n/3, off the right edge of the table. There is no row to read.
-
-Our values sit near its densest column without matching it (our 2^13 entry 214 equals its `h=1024`
-exactly; 2^14 is 430 vs 426; 2^15 is 868 vs 854), consistent with their stated provenance in
-`maxBitsPolicy128()` rather than in this table. A dense key *is* at least as hard as an h=1024 one
-at the same (n, q), so reading off that column would be conservative — but that is an argument a
-reviewer accepts, not a citation, and the numeric drift shows they are different analyses.
-
-Two coherent ways to close it — a decision, not an oversight:
-
-1. **Keep `hw = 0`** and cite something valid for a dense key: a lattice-estimator run at our exact
-   (n, q, σ) points, or the HE standard. This is what the pending review needs to supply.
-2. **Switch to a sparse key** (hw = 32) so the same public table applies directly. A real parameter
-   change, not a docs edit: it alters noise growth, so the level schedule, accuracy and
-   bottom-modulus headroom all need re-validating.
-
-Recorded so the gap is not mistaken for "the sibling submission already solved this."
+[BCC+24] Bossuat et al., *Security guidelines for implementing homomorphic encryption.* IACR
+Communications in Cryptology, 1(4):26, 2024.

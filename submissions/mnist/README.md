@@ -4,8 +4,9 @@ FHE submission for the HomomorphicEncryption.org `ml-inference` benchmark (`--da
 built on [HEaaN2](https://heaan.io), Crypto Lab's CKKS library. Replaces the reference
 OpenFHE/HEIR submission in this directory. The harness is unmodified.
 
-> **Security notice.** The ≥128-bit parameter justification is **not finalised** for either scheme
-> — see [DESIGN.md §5](DESIGN.md#5-security). Do not cite these parameters as reviewed.
+> **Security.** Parameters target 128-bit IND-CPA security against Table 5.2 of
+> [[BCC+24]](https://doi.org/10.62056/anxra69p1) — see [DESIGN.md §5](DESIGN.md#5-security) for the
+> per-configuration table and the measured `log(QP)` behind it.
 
 ## At a glance
 
@@ -49,3 +50,9 @@ proprietary to Crypto Lab Inc. and **not** Apache-2.0. It is redistributed under
 the same arrangement as CryptoLab's
 [Zn-multiplication submission](https://github.com/CryptoLabInc/Zn-multiplication). Its
 dependencies are listed in [LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY).
+
+## References
+
+[BCC+24] Jean-Philippe Bossuat et al. *Security guidelines for implementing homomorphic
+encryption.* IACR Communications in Cryptology, 1(4):26, 2024.
+[doi:10.62056/anxra69p1](https://doi.org/10.62056/anxra69p1)

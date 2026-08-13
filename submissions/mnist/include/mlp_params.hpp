@@ -111,7 +111,7 @@ constexpr u32 RESCALE_BITS = 25;
 constexpr u32 NUM_MULTS = 3;
 
 //---------------------------------------------------------------------------
-// SECURITY-RELEVANT PARAMETERS -- ANALYSIS PENDING.
+// SECURITY-RELEVANT PARAMETERS.
 //
 // The secret key is sampled at 2^SMALL_LOG_DEGREE. The switching key budget is
 // sized from that degree, halved again by CI (SKGenerator samples only half the
@@ -129,10 +129,9 @@ constexpr u32 NUM_MULTS = 3;
 // the LWE problem and the 430-bit budget, are unchanged from that earlier
 // configuration.
 //
-// The >=128-bit claim for this configuration has NOT been signed off yet; the
-// numbers in swkMaxBits() are provisional and HW may change. See section 5,
-// "Security", of DESIGN.md. Everything a review would need to change is in
-// this block.
+// 128-bit status: this configuration's widest published key spends
+// log(QP) = 227 against swkMaxBits() == 430. See section 5 of DESIGN.md.
+// Everything a review would need to change is in this block.
 //---------------------------------------------------------------------------
 
 constexpr u32 SMALL_LOG_DEGREE = 15; // degree the secret key is sampled at
@@ -140,10 +139,21 @@ constexpr u32 HW = 0;                // 0 = uniform ternary
 constexpr double SWK_MARGIN = 5.0;
 constexpr double NOISE_STDDEV = 3.2;
 
-// Provisional 128-bit modulus budget for a uniform-ternary secret (hw == 0),
-// keyed by RLWE dimension. 2^12..2^15 from HEaven's maxBitsPolicy128(); 2^16
-// and 2^17 from ePrint 2024/463. The entries are hw-specific -- do not
-// substitute a value from an hw > 0 table. Shared by both the HS layer scheme
+// 128-bit modulus budget for a uniform-ternary secret (hw == 0), keyed by RLWE
+// dimension. Every entry is the "Ternary" column of Table 5.2 in
+//
+//   Bossuat et al., "Security Guidelines for Implementing Homomorphic
+//   Encryption", IACR Communications in Cryptology 1(4), 2024.
+//   https://doi.org/10.62056/anxra69p1
+//
+// i.e. the maximal log2(q) reaching Category 128 at that dimension, for
+// Gaussian error sigma = 3.19 (we run 3.2, marginally harder). q there is the
+// LARGEST modulus published, which under hybrid key switching is the switching
+// key's Q*P -- not the ciphertext chain. See section 5 of DESIGN.md.
+//
+// The entries are hw-specific -- do not substitute a value from an hw > 0
+// table such as the sparse-key one CryptoLab's Zn-multiplication submission
+// cites; this key is dense. Shared by both the HS layer scheme
 // (which uses 13..17) and the PCMM scheme in mlp_pcmm.hpp (which needs 12 for
 // the small/medium profile and 14 for large): one table, so a review only
 // edits it once.
@@ -153,7 +163,7 @@ inline u32 maxBits128(u32 log_degree) {
     case 13: return 214;
     case 14: return 430;
     case 15: return 868;
-    case 16: return 1748;
+    case 16: return 1747;
     case 17: return 3523;
     default:
         throw std::runtime_error("no 128-bit maxBits entry for N=2^" +
@@ -355,15 +365,16 @@ constexpr Profile profile(InstanceSize size) {
 constexpr u32 IN_P = INPUT_DIM + 1; // 485
 
 //---------------------------------------------------------------------------
-// SECURITY-RELEVANT PARAMETERS -- ANALYSIS PENDING, same status as the HS
-// scheme's block above and the same open item in DESIGN.md section 5. Unlike
-// HS, PCMM's secret key is sampled directly at its working degree (no
-// lifting), so its security rests on maxBits128(logRlweDim(profile)) alone
-// with no separate lifting argument to review.
+// SECURITY-RELEVANT PARAMETERS. PCMM's secret key is sampled directly at its
+// working degree (no lifting), so its security rests on
+// maxBits128(logRlweDim(profile)) alone, with no separate lifting argument.
 //
 // The budget each profile's chain is sized against:
 //   small/medium  NORMAL N=2^12 -> RLWE dim 2^12 -> 106 bits
 //   large         CI     N=2^15 -> RLWE dim 2^14 -> 430 bits
+//
+// small/medium sits right on its budget, so it has no headroom to absorb a
+// wider chain: re-check log(QP) before changing base_bits or rescale_bits here.
 //
 // What the two ends of base_bits/rescale_bits are:
 //   lower -- the bottom modulus (base_bits - rescale_bits) has to clear the
