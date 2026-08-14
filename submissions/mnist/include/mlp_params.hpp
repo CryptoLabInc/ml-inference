@@ -125,6 +125,9 @@ inline size_t numCtxts(size_t n) {
     return (n + IMAGES_PER_CTXT - 1) / IMAGES_PER_CTXT;
 }
 
+// The PCMM circuit: one feature per matrix row, one image per column, the
+// opposite of the Halevi-Shoup above. No rotations needed, hence
+// no rotation keys.
 namespace pcmm {
 
 struct Profile {
@@ -151,9 +154,13 @@ constexpr Profile profile(InstanceSize size) {
     return size == InstanceSize::LARGE ? LARGE_PROFILE : MEDIUM_PROFILE;
 }
 
-//extra slot for bias 
+// This is for the bias column added to fc1.
 constexpr u32 IN_P = INPUT_DIM + 1;
 
+
+// How much the levels drop from the top of the chain:
+//   L3 fc1 PCMM -> L2 square -> L1 fc2 PCMM -> L0 +b2 (no drop), decrypt
+// The square relinearizes at L1, which is the level genRelinKey builds for.
 constexpr u32 FC1_IN_DROP = 0, FC1_OUT_DROP = 1;
 constexpr u32 SQUARE_OUT_DROP = 2;
 constexpr u32 FC2_IN_DROP = 2, FC2_OUT_DROP = 3;
