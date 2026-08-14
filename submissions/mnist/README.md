@@ -87,74 +87,30 @@ L0  +b2 (plaintext add, no level cost), decrypt
 
 ## Security and parameters
 
-Every instance targets **128-bit classical security** against a semi-honest server. The claim
-rests on **Table 5.2** of [BCC+24], *Security guidelines for implementing homomorphic
-encryption* ([IACR CiC 1(4):26](https://cic.iacr.org/p/1/4/26/pdf)), which gives the largest
-ciphertext modulus that can be used at each RLWE dimension for a uniform ternary secret and
-Gaussian error with σ = 3.19. Its λ = 128, ternary column is transcribed into `mlp::maxBits128`
-([`include/mlp_params.hpp`](include/mlp_params.hpp)) for the dimensions this submission can
-reach; any other dimension throws rather than guessing:
+The submission uses CKKS with the following configuration:
 
-| RLWE dimension | 2^12 | 2^13 | 2^14 | 2^15 | 2^16 | 2^17 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| max log₂(*q*) | 106 | 214 | 430 | 868 | 1747 | 3523 |
-
-Each scheme stays within its entry:
-
-| | size 0 (HS) | sizes 1–2 (PCMM) | size 3 (PCMM) |
+| Parameter | HS (size 0) | PCMM (sizes 1–2) | PCMM (size 3) |
 | --- | --- | --- | --- |
-| Ring | 2^15, CI subring | 2^12, plain | 2^15, CI subring |
-| **RLWE dimension** | **2^14** | **2^12** | **2^14** |
-| Ciphertext modulus | 30 + 3×25 = 105 bits | 34 + 3×24 = 106 bits | 44 + 3×27 = 125 bits |
-| Table 5.2 budget | 430 bits | 106 bits | 430 bits |
+| Ring degree | 2^15, CI subring | 2^12 | 2^15, CI subring |
+| LWE dimension | 2^14 | 2^12 | 2^14 |
+| Secret key | uniform ternary (hw = 0) | uniform ternary (hw = 0) | uniform ternary (hw = 0) |
+| Error distribution | Discrete Gaussian (σ = 3.2) | Discrete Gaussian (σ = 3.2) | Discrete Gaussian (σ = 3.2) |
+| `log(QP)` | 227 | 106 | 158 |
 
-The error distribution is a discrete Gaussian with σ = 3.2 at every size, marginally wider than
-the σ = 3.19 the table is estimated for, so the entries apply unchanged — the paper notes that
-distributions with standard deviation close to 3.19 yield essentially the same log₂(*q*).
+According to Table 5.2 of [[BCC+24]](https://doi.org/10.62056/anxra69p1), which bounds `log(q)`
+to 430 for dimension 2^14 and 106 for 2^12 under a uniform-ternary secret, these configurations
+provide 128 bits of security in the IND-CPA model. The bound is on `q = PQ`, the ciphertext
+modulus together with the additional modulus `P` used for relinearization, not on the ciphertext
+chain alone — `log(QP)` above is what the bound is checked against.
 
-The same budget bounds key switching. `mlp::maxBits128` feeds
-`SwKeyGenParamsBuilder::setModUpPrimes(max_bits, margin)`, whose `max_bits` is the total
-bit-size budget of the *QP* modulus, so the hybrid key-switching modulus is capped at the
-table entry as well, not just the ciphertext chain.
+`hw = 0` means the secret is uniform ternary rather than sparse, so Table 5.2's ternary column
+applies directly. Under the conjugate-invariant
+subring the secret has half the free coefficients of the full ring, so the CI configurations are
+read at dimension 2^14 rather than 2^15; `mlp::pcmm::logRlweDim` performs that halving, and its
+result is what reaches `mlp::maxBits128`.
 
-### Secret key: Hamming weight
-
-`HW = 0` selects a **uniform ternary** secret — every coefficient drawn independently and
-uniformly from {−1, 0, 1}, with no sparsity constraint. This is exactly the distribution
-Table 5.2's `Ternary` column is estimated for, so the table applies with no further argument.
-
-A sparse secret (fixed low Hamming weight, e.g. hw = 32) would admit a larger modulus at the
-same dimension and is common in CKKS deployments, but it falls outside this table: sparse keys
-need their own estimates, and their concrete security is sensitive to hybrid attacks that
-exploit the sparsity. Keeping hw = 0 costs some modulus budget and buys a claim that rests
-entirely on the guidelines document.
-
-Both circuits also sample the secret **directly at the working degree** — no key lifting from a
-smaller ring — so the dimension in the estimate is the dimension actually used.
-
-### Conjugate-invariant ring
-
-Sizes 0 and 3 work in the **conjugate-invariant subring** ([ePrint 2018/952](https://eprint.iacr.org/2018/952))
-rather than the full cyclotomic. Its elements are those fixed by conjugation, so a message of
-degree 2^15 is carried by **2^14 RLWE coefficients**, and the slots are real instead of complex.
-The submission uses it for the packing win: 16384 real slots per message instead of 16384
-complex ones it has no use for.
-
-The security consequence is that **the RLWE dimension is half the message degree**, and the
-lookup must use the former. `mlp::pcmm::logRlweDim` performs that halving, and its result — never
-the raw `log_degree` — is what reaches `maxBits128`:
-
-```cpp
-constexpr u32 logRlweDim(const Profile &p) {
-    return p.ntt_alg == heaan::NTTAlgorithm::CYC_FOR_CI ? p.log_degree - 1
-                                                        : p.log_degree;
-}
-```
-
-So sizes 0 and 3 are budgeted at 2^14 → **430 bits**, not at 2^15 → 868 bits. Reading the table
-at the message degree would overstate the allowance by a factor of two and is the mistake this
-helper exists to prevent. Sizes 1–2 use the plain ring, where degree and RLWE dimension coincide
-and the helper is the identity.
+[BCC+24] Bossuat et al., *Security guidelines for implementing homomorphic encryption.* IACR
+Communications in Cryptology, 1(4):26, 2024.
 
 ## Build and run
 
