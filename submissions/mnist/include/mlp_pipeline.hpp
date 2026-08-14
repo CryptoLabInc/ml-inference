@@ -57,10 +57,9 @@ struct Layer {
     bool activate = false;
     std::unique_ptr<heaan::RotKeyPtrs> rot_keys;
     std::unique_ptr<heaan::MatrixVectorEval> matvec;
-    bool keyless_fold = false;
     i32 fold_stride = 0;
     u32 fold_factor = 1;
-    heaan::RotKeyPtrs fold_keys; // only when the fold must be keyed
+    heaan::RotKeyPtrs fold_keys;
     std::vector<i32> fold_steps;
     heaan::Ptr<heaan::IPlaintext> bias;
     heaan::KeyPtr relin_key;

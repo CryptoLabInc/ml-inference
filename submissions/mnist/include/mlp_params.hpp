@@ -21,7 +21,6 @@
 #include "HEaaN2/HEaaN2.hpp"
 #include "params.h"
 
-#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -60,8 +59,7 @@ constexpr u32 BASE_BITS = 30;
 constexpr u32 RESCALE_BITS = 25;
 constexpr u32 NUM_MULTS = 3;
 
-constexpr u32 SMALL_LOG_DEGREE = 15;
-constexpr u32 HW = 0;
+constexpr u32 HW = 0; // 0 = uniform ternary
 constexpr double SWK_MARGIN = 5.0;
 constexpr double NOISE_STDDEV = 3.2;
 
@@ -80,7 +78,7 @@ inline u32 maxBits128(u32 log_degree) {
 }
 
 inline u32 swkMaxBits() {
-    return maxBits128(SMALL_LOG_DEGREE -
+    return maxBits128(LOG_DEGREE -
                       (NTT_ALG == heaan::NTTAlgorithm::CYC_FOR_CI ? 1 : 0));
 }
 
@@ -97,28 +95,6 @@ constexpr LayerGeom FC2{128, 128, LABEL_DIM, 64, false};
 
 constexpr u32 FC1_IN_DROP = 0, FC1_OUT_DROP = 1;
 constexpr u32 FC2_IN_DROP = 2, FC2_OUT_DROP = 3;
-
-inline i32 frobPowForRot(i32 step, u32 log_degree) {
-    const uint64_t num_slots = 1ULL << (log_degree - 1);
-    const uint64_t modulus = 1ULL << (log_degree + 1);
-    auto exp = static_cast<uint64_t>(
-        ((static_cast<int64_t>(step) % static_cast<int64_t>(num_slots)) +
-         static_cast<int64_t>(num_slots)) %
-        static_cast<int64_t>(num_slots));
-    uint64_t pow = 1, base = 5;
-    for (; exp != 0; exp >>= 1) {
-        if (exp & 1)
-            pow = (pow * base) % modulus;
-        base = (base * base) % modulus;
-    }
-    return static_cast<i32>(pow);
-}
-
-inline u32 rotInvariantPeriod(u32 log_degree_low) {
-    if (log_degree_low == 0)
-        throw std::runtime_error("log_degree_low must be positive");
-    return 1U << (log_degree_low - 1);
-}
 
 inline std::vector<i32> bsIndices(const LayerGeom &g) {
     std::vector<i32> v;

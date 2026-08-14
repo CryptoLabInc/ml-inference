@@ -20,12 +20,9 @@ void runHS(const InstanceParams &prms) {
     const u32 top = levels.top();
 
     SKGenerator skgen{SKGenParams{LOG_DEGREE, HW, NTT_ALG}};
-    SKGenerator skgen_low{SKGenParams{SMALL_LOG_DEGREE, HW, NTT_ALG}};
-    auto sk = skgen.genHighDegreeKey(*skgen_low.genKey());
+    auto sk = skgen.genKey();
 
-    const u32 period = rotInvariantPeriod(SMALL_LOG_DEGREE);
     const u32 fc1_stride = IMAGES_PER_CTXT * FC1.p;
-    const bool fc1_keyless = (fc1_stride % period == 0);
 
     EncKeyGenerator enckeygen{EncKeyGenParams{DiscreteGaussian(NOISE_STDDEV),
                                               POLY_TYPE, levels.mods[top],
@@ -61,9 +58,7 @@ void runHS(const InstanceParams &prms) {
     serial::save((prms.pubkeydir() / ENC_KEY_FILE).string(), *enc_key);
     serial::save((prms.pubkeydir() / ROT_KEY_FC1_FILE).string(), rot_keys_fc1);
     serial::save((prms.pubkeydir() / ROT_KEY_FC2_FILE).string(), rot_keys_fc2);
-    if (!fc1_keyless)
-        serial::save((prms.pubkeydir() / ROT_KEY_FOLD_FILE).string(),
-                     fold_keys);
+    serial::save((prms.pubkeydir() / ROT_KEY_FOLD_FILE).string(), fold_keys);
     serial::save((prms.pubkeydir() / RELIN_KEY_FILE).string(), *relin_key);
 }
 
