@@ -18,8 +18,8 @@ No bootstrapping in either.
 fc1 (128×484, +b1)  →  x²  →  fc2 (10×128, +b2)
 ```
 
-A BatchNorm-folded 2-layer MLP, identical for both schemes. `x²` is the activation the network was
-**trained** with, not a polynomial approximation of ReLU, so the circuit evaluates the model
+A BatchNorm-folded 2-layer MLP, identical for both schemes. `x²` is the  with which the network was
+**trained**, not a polynomial approximation of ReLU, so the circuit evaluates the model
 exactly — the only error is CKKS noise (measured: max |decrypted − plaintext logit| = 0.109 on
 logits spanning [−32, +14]). Weights are row-major CSV in [`weights/`](weights/); shapes,
 normalization and provenance in [`weights/manifest.txt`](weights/manifest.txt). Folded plaintext
@@ -68,6 +68,24 @@ opposite convention from HS. Sizes 1–2 and size 3 are **tuned separately**: th
 how many blocks a matrix row splits into, and that decides which ring and which modulus chain come
 out cheapest. Sizes 1 and 2 share one profile because both fit a single block and do identical
 work. `mlp::pcmm::profile(size)` is the selector.
+
+Written on the plaintext matrices, PCMM computes exactly the model at the top of this page —
+`buildModel` and `inference` in [`src/mlp_pcmm.cpp`](src/mlp_pcmm.cpp) are this, line for line:
+
+```
+U1 = [ W1 | b1 ]        128 × 485   fc1 weights, b1 folded in as an extra column
+X  = [ x_1 … x_n ; 1 ]  485 × n     one image per column, a constant-1 row appended
+
+H1 = U1 · X              128 × n    W1·x_i + b1 for every image i              (fc1, +b1)
+H2 = H1 ⊙ H1             128 × n    elementwise square               (the x² activation)
+Y  = W2 · H2 + b2         10 × n    fc2, then b2 added to every column         (fc2, +b2)
+```
+
+`U1` and `W2` are the plaintext matrices `model.fc1_weights`/`model.fc2_weights` encode; `X` and
+`Y` are the ciphertext matrices `cx`/`cy`. Each line above is exactly one step in the code: a
+`pcmm` GEMM, a square, or an add, on those same shapes. PCMM does not approximate or restructure
+the model — it runs this same computation, just with `X` and `Y` encrypted and `U1`/`W2`/`b2`
+staying plaintext, exactly as the server already stores them.
 
 | | sizes 1–2 (100, 1000) | size 3 (10000) |
 | --- | --- | --- |
