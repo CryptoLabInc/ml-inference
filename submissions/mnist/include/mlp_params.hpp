@@ -71,7 +71,7 @@ inline u32 maxBits128(u32 log_degree) {
     case 13: return 214;
     case 14: return 430;
     case 15: return 868;
-    case 16: return 1748;
+    case 16: return 1747;
     case 17: return 3523;
     default:
         throw std::runtime_error("no 128-bit maxBits entry for N=2^" +
