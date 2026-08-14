@@ -3,20 +3,6 @@
 // This software is licensed under the terms of the Apache v2 License.
 // See the LICENSE.md file for details.
 //============================================================================
-//
-// Stage 6: pack, encode and encrypt the batch.
-//
-// HS: IMAGES_PER_CTXT images ride in one ciphertext at slot(c,i) =
-// c*IMAGES_PER_CTXT + i, so a batch of n needs ceil(n/IMAGES_PER_CTXT)
-// ciphertexts rather than n.
-//
-// PCMM: the whole batch packs into ONE ciphertext matrix (whose blocks absorb
-// a batch larger than one message), encrypted under the client's own secret
-// key -- see the note in client_key_generation.cpp on why PCMM has no
-// public-key encryption available.
-//
-// Either way, the harness only measures the byte size of ciphertexts_upload/,
-// so the file layout is ours to choose.
 
 #include "mlp_pcmm.hpp"
 #include "mlp_pipeline.hpp"
@@ -89,8 +75,6 @@ void runPcmm(const InstanceParams &prms, Device dev, InstanceSize size) {
 
     auto cx = ICtMatrix::make();
     encryptor.encrypt(*px, *sk, *cx);
-    // Relabel as coefficient-encoded before it reaches the server's GEMM,
-    // which takes coefficient-encoded operands only.
     pcmm::setDFT(*cx, /*dft=*/false, num_images, prof);
 
     fs::create_directories(prms.ctxtupdir());

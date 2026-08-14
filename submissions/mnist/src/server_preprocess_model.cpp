@@ -3,6 +3,7 @@
 // This software is licensed under the terms of the Apache v2 License.
 // See the LICENSE.md file for details.
 //============================================================================
+<<<<<<< HEAD
 //
 // Stage 3: server-side model preprocessing.
 //
@@ -21,6 +22,8 @@
 // PCMM's model encoding cannot move here -- its shapes depend on the batch
 // size -- but it is cheap. Its raw weights are cached here so the CSVs are
 // parsed once.
+=======
+>>>>>>> b9fa90b (comment removal)
 
 #include "mlp_pcmm.hpp"
 #include "mlp_pipeline.hpp"
@@ -50,26 +53,25 @@ int main() try {
 
     fs::create_directories(CACHE_DIR);
 
-    // HS: padded p x q diagonal layout. Only the bias is read back in stage 7
-    // now, but the padded weights are what the diagonals are built from here.
-    const auto fc1 = padWeights(FC1, W1, b1);
-    const auto fc2 = padWeights(FC2, W2, b2);
-    writeLayerWeights(fc1, std::string(CACHE_DIR) + "/fc1.bin");
-    writeLayerWeights(fc2, std::string(CACHE_DIR) + "/fc2.bin");
-
-    // PCMM: raw CSV shapes, unpadded.
     pcmm::writeRawModel({W1, b1, W2, b2}, std::string(CACHE_DIR) + "/pcmm.bin");
 
+<<<<<<< HEAD
     // HS: the expensive part -- encode both layers' diagonals, no keys needed.
     // Several seconds of work, skipped on a PCMM instance, which never looks
     // at them; the marker is the only way this stage can know. An absent
     // marker means prepare everything.
+=======
+>>>>>>> b9fa90b (comment removal)
     const auto marked = readInstanceMarker();
     if (marked && usePcmm(*marked)) {
         std::cout << "         [server] model cached to " << CACHE_DIR
                   << " (PCMM instance: HS diagonals not needed)\n";
         return 0;
     }
+
+    //HS specific
+    const auto fc1 = padWeights(FC1, W1, b1);
+    const auto fc2 = padWeights(FC2, W2, b2);
 
     const Levels levels = buildLevels();
     const u32 top = levels.top();

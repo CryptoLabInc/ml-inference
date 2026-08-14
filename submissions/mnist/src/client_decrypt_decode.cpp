@@ -3,16 +3,6 @@
 // This software is licensed under the terms of the Apache v2 License.
 // See the LICENSE.md file for details.
 //============================================================================
-//
-// Stage 8: decrypt the result and read the logits back out.
-//
-// HS: logit r of image i within a ciphertext lives at slot
-// r*IMAGES_PER_CTXT + i.
-// PCMM: logit r of image i lives at column (i / slotsPerMsg()) * degree +
-// (i % slotsPerMsg()) of matrix row r -- see pcmm::unpackLogits.
-//
-// Either scheme writes the same output format: one line per image, LABEL_DIM
-// space-separated logits, so client_postprocess needs no dispatch of its own.
 
 #include "mlp_pcmm.hpp"
 #include "mlp_pipeline.hpp"
@@ -66,9 +56,6 @@ std::vector<std::vector<double>> runPcmm(const InstanceParams &prms, Device dev,
                                          InstanceSize size) {
     const auto prof = pcmm::profile(size);
     const Levels levels = pcmm::buildLevels(prof);
-    // The result is relabelled back to slot-encoded by setDFT below, so decode
-    // follows the plaintext's own label; the encoder only has to agree on the
-    // remaining parameters -- the same one the weights were built with.
     const EnDecoder coeff_encoder = pcmm::makeCoeffEncoder(levels, prof);
     const EnDecryptor encryptor{EncryptParams{DiscreteGaussian(NOISE_STDDEV)}};
 
