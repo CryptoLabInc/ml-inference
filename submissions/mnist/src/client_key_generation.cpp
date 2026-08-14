@@ -3,17 +3,6 @@
 // This software is licensed under the terms of the Apache v2 License.
 // See the LICENSE.md file for details.
 //============================================================================
-//
-// Stage 2.2: generate all key material at the client.
-//
-// Dispatches on instance size (mlp::usePcmm): single uses the Halevi-Shoup
-// layer scheme below; small/medium/large use PCMM (mlp_pcmm.hpp).
-// The two schemes need different key material -- HS wants rotation keys for
-// its two matvec layers plus a public encryption key; PCMM needs neither
-// rotation keys nor a public encryption key (its matrix encrypt is
-// necessarily symmetric-key, see runPcmm) but does need a relinearization
-// key at a different level. Each size only ever runs one scheme, so the two
-// keygen paths never collide inside the same io/<size>/ directory tree.
 
 #include "mlp_pcmm.hpp"
 #include "mlp_pipeline.hpp"
@@ -27,32 +16,20 @@ using namespace mlp;
 
 namespace {
 
-// The secret key is sampled directly at 2^LOG_DEGREE. The
-// switching-key budget is sized from that degree. See mlp_params.hpp.
-//
-// Rotation keys are derived from the layer *shapes* only. The client has no
-// model and is not entitled to one, so nothing here may depend on the weights.
 void runHS(const InstanceParams &prms) {
     const Levels levels = buildLevels();
     const u32 top = levels.top();
 
-    // ---- secret key ----
     SKGenerator skgen{SKGenParams{LOG_DEGREE, HW, NTT_ALG}};
     auto sk = skgen.genKey();
 
     const u32 fc1_stride = IMAGES_PER_CTXT * FC1.p;
 
-    // ---- public encryption key, at the level inputs are encrypted to ----
     EncKeyGenerator enckeygen{EncKeyGenParams{DiscreteGaussian(NOISE_STDDEV),
                                               POLY_TYPE, levels.mods[top],
                                               NTT_ALG}};
     auto enc_key = enckeygen.genKey(*sk);
 
-    // ---- switching keys ----
-    // makeSwkParams() is shared with server_preprocess_model, which encodes the
-    // layer diagonals against the same gadget decomposition. Keep them going
-    // through that one function: if the two disagreed, the encoded diagonals
-    // would not bind to these keys.
     const u32 fc1_in = top - FC1_IN_DROP, fc1_out = top - FC1_OUT_DROP;
     const u32 fc2_in = top - FC2_IN_DROP;
 
@@ -66,19 +43,15 @@ void runHS(const InstanceParams &prms) {
         *sk, MatrixVectorEval::rotKeyIndices(
                  makeMvParams(FC2, levels, fc2_in, levels.scales[fc2_in])));
 
-    // Relinearization for the x^2, at the level the squaring happens on.
     SwKeyGenerator relin_gen(makeSwkParams(levels, fc1_out));
     auto relin_key = relin_gen.genRelinKey(*sk);
 
-    // fc1's fold keys, one per non-identity coset. They live at fc1's OUTPUT
-    // level because the fold runs after the ciphertext has been adjusted there.
     std::set<i32> fold_steps;
     for (u32 j = 1; j < FC1.q / FC1.p; ++j)
         fold_steps.insert(static_cast<i32>(fc1_stride * j));
     SwKeyGenerator fold_gen(makeSwkParams(levels, fc1_out));
     auto fold_keys = fold_gen.genRotKeys(*sk, fold_steps);
 
-    // ---- serialize ----
     fs::create_directories(prms.pubkeydir());
     fs::create_directories(prms.seckeydir());
 
@@ -90,21 +63,7 @@ void runHS(const InstanceParams &prms) {
     serial::save((prms.pubkeydir() / RELIN_KEY_FILE).string(), *relin_key);
 }
 
-// PCMM's secret key is sampled directly at the profile's log_degree and needs
-// no rotation keys at all -- only a relinearization key for the x^2 step.
-//
-// HEaaN2's public EnDecryptor exposes matrix encrypt/decrypt only against a
-// secret key (there is no public-encryption-key overload for IPtMatrix /
-// ICtMatrix, unlike the plain-ciphertext overload the HS path uses above).
-// The client's own sk is therefore what client_encode_encrypt_input encrypts
-// with, and what this stage saves to seckeydir() -- still exclusively a
-// client-side operation, and sk never leaves seckeydir() (which the harness
-// does not measure), but it is a real, disclosed asymmetry against the HS
-// path's public-key encryption. See "Encryption: public key vs symmetric key"
-// in DESIGN.md.
 void runPcmm(const InstanceParams &prms, InstanceSize size) {
-    // Large is tuned separately from small/medium, so every PCMM stage
-    // resolves its parameters from the instance size -- see mlp_params.hpp.
     const auto prof = pcmm::profile(size);
     const Levels levels = pcmm::buildLevels(prof);
 
@@ -125,16 +84,7 @@ void runPcmm(const InstanceParams &prms, InstanceSize size) {
 int main(int argc, char *argv[]) try {
     const auto size = parseInstanceSize(argc, argv);
     const InstanceParams prms(size);
-    // Stage 3 runs after this one but is given no arguments, so it cannot tell
-    // which scheme to prepare. Record the instance size on the way past -- see
-    // the instance-marker note in mlp_pipeline.hpp.
     writeInstanceMarker(size);
-
-    // Deliberately no targetDevice() here: key generation runs on the CPU. The
-    // client is a separate party and need not own a GPU, and the keys are
-    // serialized either way -- server_encrypted_compute is what loads them onto
-    // the device. Do not "fix" this by moving the key material to the GPU
-    // without also re-checking what the harness then attributes to stage 2.2.
 
     if (usePcmm(size))
         runPcmm(prms, size);

@@ -17,10 +17,6 @@ using namespace heaan;
 
 namespace mlp {
 
-//===========================================================================
-// Parameter reconstruction
-//===========================================================================
-
 Levels buildLevels() {
     paramsUtils::LevelsBuilder lb;
     lb.setRing(LOG_DEGREE, POLY_TYPE);
@@ -51,20 +47,13 @@ MatrixVectorEvalParams makeMvParams(const LayerGeom &geom, const Levels &levels,
 SwKeyGenParams makeSwkParams(const Levels &levels, u32 level) {
     paramsUtils::SwKeyGenParamsBuilder swk;
     swk.setNoiseDistribution(DiscreteGaussian(NOISE_STDDEV));
-    // The keys live in the full ring...
     swk.setRing(LOG_DEGREE, POLY_TYPE);
-    // ...but the budget is that of the degree the key was actually sampled at.
     swk.setModUpPrimes(swkMaxBits(), SWK_MARGIN);
     return swk.build(levels.mods[level], NTT_ALG == NTTAlgorithm::CYC_FOR_CI);
 }
 
-//===========================================================================
-// Model I/O
-//===========================================================================
-
 namespace {
 
-// Split a stream of numbers on commas / whitespace / newlines.
 std::vector<double> parseNumbers(const std::string &text) {
     std::vector<double> v;
     std::string cur;
@@ -140,39 +129,6 @@ LayerWeights padWeights(const LayerGeom &geom,
     return lw;
 }
 
-void writeLayerWeights(const LayerWeights &lw, const std::string &path) {
-    std::ofstream f(path, std::ios::binary);
-    if (!f.good())
-        throw std::runtime_error("cannot write " + path);
-    f.write(reinterpret_cast<const char *>(lw.W.data()),
-            static_cast<std::streamsize>(lw.W.size() * sizeof(double)));
-    f.write(reinterpret_cast<const char *>(lw.b.data()),
-            static_cast<std::streamsize>(lw.b.size() * sizeof(double)));
-    if (!f)
-        throw std::runtime_error("short write to " + path);
-}
-
-LayerWeights readLayerWeights(const LayerGeom &geom, const std::string &path) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f.good())
-        throw std::runtime_error("cannot open " + path +
-                                 " (run server_preprocess_model first)");
-    LayerWeights lw;
-    lw.W.resize(static_cast<size_t>(geom.p) * geom.q);
-    lw.b.resize(geom.n_out);
-    f.read(reinterpret_cast<char *>(lw.W.data()),
-           static_cast<std::streamsize>(lw.W.size() * sizeof(double)));
-    f.read(reinterpret_cast<char *>(lw.b.data()),
-           static_cast<std::streamsize>(lw.b.size() * sizeof(double)));
-    if (!f)
-        throw std::runtime_error("truncated model cache " + path);
-    return lw;
-}
-
-//===========================================================================
-// Packing
-//===========================================================================
-
 Message packImages(const std::vector<std::vector<double>> &images,
                    size_t first, size_t count) {
     if (count > IMAGES_PER_CTXT)
@@ -204,9 +160,6 @@ std::map<i32, Message> buildDiags(const LayerGeom &geom,
             diag[s] = Complex(static_cast<Real>(
                 W[(c % geom.p) * geom.q + (c + k) % geom.q]));
         }
-        // Offset gs + bs == IMAGES_PER_CTXT * k by construction of
-        // bsIndices/gsIndices; keep every diagonal so the declared step sets
-        // always have something to evaluate.
         diags[static_cast<i32>(IMAGES_PER_CTXT * k)] = std::move(diag);
     }
     return diags;
@@ -222,21 +175,12 @@ Message buildBiasMessage(const LayerGeom &geom, const std::vector<double> &b) {
     return msg;
 }
 
-//===========================================================================
-// Layer assembly and evaluation
-//===========================================================================
-
 MatrixVectorEvalEncoded encodeDiags(const LayerGeom &geom,
                                     const std::vector<double> &W,
                                     const Levels &levels, u32 in_level,
                                     Device dev) {
     const auto mv_params =
         makeMvParams(geom, levels, in_level, levels.scales[in_level]);
-    // The gadget decomposition is why encoding needs the switching-key params
-    // at all: the baby-step rotations are hoisted, so the diagonals are
-    // multiplied in before the mod-down and therefore encoded in the
-    // key-switching modulus rather than the ciphertext's. It carries no key
-    // material -- makeSwkParams() generates nothing.
     const auto gadget = makeSwkParams(levels, in_level).getGadgetDecomp();
     const auto diags = buildDiags(geom, W);
     return MatrixVectorEvalEncoded(mv_params, gadget, diags, dev);
@@ -259,13 +203,9 @@ Layer makeLayer(const LayerGeom &geom, const std::vector<double> &bias,
         makeMvParams(geom, levels, in_level, levels.scales[in_level]);
 
     lyr.rot_keys = std::move(rot_keys);
-    // Binds the keys to the already-encoded diagonals -- no encoding here.
     lyr.matvec = std::make_unique<MatrixVectorEval>(mv_params, *lyr.rot_keys,
                                                     encoded);
 
-    // Fold: sum the q/p cosets {0, s, 2s, ...} as explicit rotations. The keys
-    // are generated by client_key_generation at this layer's OUTPUT level,
-    // because the fold runs after the ciphertext has been adjusted there.
     lyr.fold_stride = static_cast<i32>(IMAGES_PER_CTXT * geom.p);
     lyr.fold_factor = geom.q / geom.p;
     if (lyr.fold_factor > 1) {
@@ -295,14 +235,8 @@ void homLayer(Ptr<ICiphertext> &ct, const Layer &lyr, const HomEval &eval,
     auto res = ICiphertext::make(EncType::RLWE);
     lyr.matvec->eval(*ct, *res);
 
-    // MatrixVectorEval drops exactly one level. adjust lands the ciphertext on
-    // the layer's output modulus and pins its scale, which is what lets a
-    // layer drop more than one level and keeps the offline-encoded bias
-    // addable.
     flex.adjust(*res, *res, lyr.mod_to, lyr.scale_to);
 
-    // Fold: one hoisted rotation per non-identity coset (coset 0 is the
-    // identity and is already in `res`), then sum them in.
     if (!lyr.fold_steps.empty()) {
         std::vector<Ptr<ICiphertext>> rots;
         std::vector<ICiphertext *> rot_ptrs;
@@ -323,10 +257,6 @@ void homLayer(Ptr<ICiphertext> &ct, const Layer &lyr, const HomEval &eval,
         auto sq = ICiphertext::make(EncType::RLWE);
         eval.tensor(*res, *res, *sq);
         eval.relin(*sq, *lyr.relin_key);
-        // The squaring must be followed by a rescale: MatrixVectorEval always
-        // encodes its diagonals at the input's scale, so carrying a squared
-        // scale into the next layer would put a 2^75 value under a 2^55
-        // modulus and wrap.
         auto rescaled = ICiphertext::make(EncType::RLWE);
         eval.rescale(*sq, *rescaled);
         ct = std::move(rescaled);
@@ -334,10 +264,6 @@ void homLayer(Ptr<ICiphertext> &ct, const Layer &lyr, const HomEval &eval,
         ct = std::move(res);
     }
 }
-
-//===========================================================================
-// Instance marker
-//===========================================================================
 
 namespace {
 std::string markerPath() {
@@ -362,10 +288,6 @@ std::optional<InstanceSize> readInstanceMarker() {
         return std::nullopt;
     return static_cast<InstanceSize>(v);
 }
-
-//===========================================================================
-// Harness file formats
-//===========================================================================
 
 std::vector<std::vector<double>> readSamples(const std::string &path, u32 dim) {
     std::ifstream f(path);
