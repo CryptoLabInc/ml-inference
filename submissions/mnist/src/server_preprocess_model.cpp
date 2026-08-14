@@ -3,27 +3,6 @@
 // This software is licensed under the terms of the Apache v2 License.
 // See the LICENSE.md file for details.
 //============================================================================
-<<<<<<< HEAD
-//
-// Stage 3: server-side model preprocessing.
-//
-// The harness invokes this stage with NO arguments (run_submission.py:97), so
-// it cannot know the instance size and cannot reach io/<size>/public_keys --
-// nothing here may depend on the instance size or on any key material.
-//
-// For the HS scheme that is not a limitation. Encoding the layer diagonals is
-// the expensive part of building the model, and it depends only on the
-// weights, the layer geometry and the level/scale -- all compile-time
-// constants -- plus the switching-key gadget decomposition, which is a *shape*
-// carrying no key material (mlp::makeSwkParams). So it happens here, and
-// stage 7 only binds the keys to the result. Encoding runs on the device the
-// evaluation later runs on.
-//
-// PCMM's model encoding cannot move here -- its shapes depend on the batch
-// size -- but it is cheap. Its raw weights are cached here so the CSVs are
-// parsed once.
-=======
->>>>>>> b9fa90b (comment removal)
 
 #include "mlp_pcmm.hpp"
 #include "mlp_pipeline.hpp"
@@ -55,13 +34,6 @@ int main() try {
 
     pcmm::writeRawModel({W1, b1, W2, b2}, std::string(CACHE_DIR) + "/pcmm.bin");
 
-<<<<<<< HEAD
-    // HS: the expensive part -- encode both layers' diagonals, no keys needed.
-    // Several seconds of work, skipped on a PCMM instance, which never looks
-    // at them; the marker is the only way this stage can know. An absent
-    // marker means prepare everything.
-=======
->>>>>>> b9fa90b (comment removal)
     const auto marked = readInstanceMarker();
     if (marked && usePcmm(*marked)) {
         std::cout << "         [server] model cached to " << CACHE_DIR
