@@ -66,7 +66,7 @@ void runPcmm(const InstanceParams &prms, InstanceSize size) {
     const auto prof = pcmm::profile(size);
     const Levels levels = pcmm::buildLevels(prof);
 
-    SKGenerator skgen{SKGenParams{prof.log_degree, pcmm::HW, prof.ntt_alg}};
+    SKGenerator skgen{SKGenParams{prof.log_degree, HW, prof.ntt_alg}};
     auto sk = skgen.genKey();
 
     auto relin_key = pcmm::genRelinKey(*sk, levels, prof);

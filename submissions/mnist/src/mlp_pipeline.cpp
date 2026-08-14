@@ -52,6 +52,7 @@ SwKeyGenParams makeSwkParams(const Levels &levels, u32 level) {
 
 namespace {
 
+// Used to parse CSV files
 std::vector<double> parseNumbers(const std::string &text) {
     std::vector<double> v;
     std::string cur;
@@ -127,6 +128,7 @@ LayerWeights padWeights(const LayerGeom &geom,
     return lw;
 }
 
+// Images are packed such that first coordinates of all images are packed first, then second coordinates, and so on.
 Message packImages(const std::vector<std::vector<double>> &images,
                    size_t first, size_t count) {
     if (count > IMAGES_PER_CTXT)
@@ -154,7 +156,7 @@ std::map<i32, Message> buildDiags(const LayerGeom &geom,
     for (u32 k = 0; k < geom.p; ++k) {
         Message diag(LOG_SLOTS);
         for (u32 s = 0; s < SLOTS; ++s) {
-            const u32 c = s / IMAGES_PER_CTXT;
+            const u32 c = s / IMAGES_PER_CTXT; // coord of image
             diag[s] = Complex(static_cast<Real>(
                 W[(c % geom.p) * geom.q + (c + k) % geom.q]));
         }
@@ -189,8 +191,6 @@ Layer makeLayer(const LayerGeom &geom, const std::vector<double> &bias,
                 u32 in_level, u32 out_level, const EnDecoder &encoder,
                 std::unique_ptr<RotKeyPtrs> rot_keys, KeyPtr relin_key,
                 Device dev, RotKeyPtrs fold_keys) {
-    if (out_level >= in_level)
-        throw std::runtime_error("layer must consume at least one level");
 
     Layer lyr;
     lyr.activate = geom.activate;

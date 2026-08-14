@@ -43,6 +43,7 @@ inline bool usePcmm(InstanceSize size) { return size >= InstanceSize::SMALL; }
 constexpr double MNIST_MEAN = 0.1307;
 constexpr double MNIST_STD = 0.3081;
 
+//Encoding params
 constexpr u32 LOG_DEGREE = 15;
 constexpr u32 LOG_SLOTS = LOG_DEGREE - 1;
 constexpr u32 SLOTS = 1U << LOG_SLOTS;
@@ -55,6 +56,7 @@ static_assert(SLOTS % COORD_DIM == 0, "coordinate dim must divide the slot count
 constexpr heaan::NTTAlgorithm NTT_ALG = heaan::NTTAlgorithm::CYC_FOR_CI;
 constexpr heaan::PolyType POLY_TYPE = heaan::PolyType::GRAFTED;
 
+//Single inference 
 constexpr u32 BASE_BITS = 30;
 constexpr u32 RESCALE_BITS = 25;
 constexpr u32 NUM_MULTS = 3;
@@ -149,17 +151,15 @@ constexpr Profile profile(InstanceSize size) {
     return size == InstanceSize::LARGE ? LARGE_PROFILE : MEDIUM_PROFILE;
 }
 
+//extra slot for bias 
 constexpr u32 IN_P = INPUT_DIM + 1;
-
-constexpr u32 HW = 0;
-constexpr double SWK_MARGIN = 5.0;
-constexpr u32 NUM_MULTS = 3;
 
 constexpr u32 FC1_IN_DROP = 0, FC1_OUT_DROP = 1;
 constexpr u32 SQUARE_OUT_DROP = 2;
 constexpr u32 FC2_IN_DROP = 2, FC2_OUT_DROP = 3;
 constexpr u32 B2_DROP = 3;
 
+//Conj Inv rings are half the size of the usual ring
 constexpr u32 logRlweDim(const Profile &p) {
     return p.ntt_alg == heaan::NTTAlgorithm::CYC_FOR_CI ? p.log_degree - 1
                                                         : p.log_degree;
