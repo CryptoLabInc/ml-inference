@@ -207,8 +207,8 @@ compilation and reports it as evaluation time.
 
 | | size 0 (1) HS | sizes 1–2 (100 / 1000) PCMM | size 3 (10000) PCMM |
 | --- | --- | --- | --- |
-| harness `Encrypted model preprocessing` | 2.094 s | 0.058 s / 0.070 s | 0.068 s |
-| harness `Encrypted computation` | 0.371 s | 0.416 s / 0.417 s | 0.521 s |
+| Harness `Encrypted model preprocessing` | 2.094 s | 0.058 s / 0.070 s | 0.068 s |
+| Harness `Encrypted computation` | 0.371 s | 0.416 s / 0.417 s | 0.521 s |
 | ├─ model setup | 0.090 s | 0.046 s | 0.058 s |
 | ├─ warm-up (discarded) | 0.013 s | 0.028 s | 0.012 s |
 | └─ evaluation | **0.70 ms** | **0.80 ms** | **3.40 ms** |
