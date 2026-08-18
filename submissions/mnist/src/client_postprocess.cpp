@@ -3,13 +3,6 @@
 // This software is licensed under the terms of the Apache v2 License.
 // See the LICENSE.md file for details.
 //============================================================================
-//
-// Stage 9: argmax over the 10 decrypted logits, in the clear.
-//
-// Writes exactly one bare decimal label per line, batch_size lines. The
-// harness compares this file string-wise against the ground truth and uses
-// len(predictions) as the accuracy denominator, so a short file would silently
-// inflate the score -- the count is asserted below.
 
 #include "mlp_pipeline.hpp"
 

@@ -5,7 +5,7 @@
 //============================================================================
 
 #include "mlp_pcmm.hpp"
-#include "mlp_pipeline.hpp" // mlp::targetDevice()
+#include "mlp_pipeline.hpp"
 
 #include <fstream>
 #include <stdexcept>
@@ -14,43 +14,33 @@ using namespace heaan;
 
 namespace mlp::pcmm {
 
-//===========================================================================
-// Parameter reconstruction
-//===========================================================================
-
-Levels buildLevels(const Profile &p) {
+Levels buildLevels(const Profile &prof) {
     paramsUtils::LevelsBuilder lb;
-    lb.setRing(p.log_degree, p.poly_type);
-    lb.initMod(p.base_bits);
-    return lb.buildAbove(NUM_MULTS, p.rescale_bits);
+    lb.setRing(prof.log_degree, prof.poly_type);
+    lb.initMod(prof.base_bits);
+    return lb.buildAbove(NUM_MULTS, prof.rescale_bits);
 }
 
-EnDecoder makeCoeffEncoder(const Levels &levels, const Profile &p) {
+EnDecoder makeCoeffEncoder(const Levels &levels, const Profile &prof) {
     return EnDecoder(
-        EncodeParams(p.poly_type, p.log_degree, levels, p.ntt_alg,
+        EncodeParams(prof.poly_type, prof.log_degree, levels, prof.ntt_alg,
                     /*coeff_encoding=*/true));
 }
 
-EnDecoder makeSlotEncoder(const Levels &levels, const Profile &p) {
+EnDecoder makeSlotEncoder(const Levels &levels, const Profile &prof) {
     return EnDecoder(
-        EncodeParams(p.poly_type, p.log_degree, levels, p.ntt_alg,
+        EncodeParams(prof.poly_type, prof.log_degree, levels, prof.ntt_alg,
                     /*coeff_encoding=*/false));
 }
 
-//===========================================================================
-// Packing
-//===========================================================================
-
 Matrix<Real> packImages(const std::vector<std::vector<double>> &images,
-                        const Profile &p) {
+                        const Profile &prof) {
     const u32 num_images = static_cast<u32>(images.size());
-    const u32 degree = 1U << p.log_degree;
-    // Images per message: degree/2 in both rings, which is NOT ringDim(p)
-    // under NORMAL -- see slotsPerMsg() in mlp_params.hpp.
-    const u32 slots = slotsPerMsg(p);
-    const u32 blocks = numBlocks(p, num_images);
+    const u32 degree = 1U << prof.log_degree;
+    const u32 slots = slotsPerMsg(prof);
+    const u32 blocks = numBlocks(prof, num_images);
 
-    Matrix<Real> x(p.log_degree, IN_P, blocks * degree);
+    Matrix<Real> x(prof.log_degree, IN_P, blocks * degree);
     for (u32 img = 0; img < num_images; ++img) {
         const auto &row = images[img];
         if (row.size() != INPUT_DIM)
@@ -59,15 +49,11 @@ Matrix<Real> packImages(const std::vector<std::vector<double>> &images,
         const u32 col = (img / slots) * degree + (img % slots);
         for (u32 r = 0; r < INPUT_DIM; ++r)
             x.at(r, col) = static_cast<Real>(row[r]);
-        x.at(INPUT_DIM, col) = 1.0; // ones-row: carries b1 into fc1
+        x.at(INPUT_DIM, col) = 1.0;
     }
     return x;
 }
 
-// Bridges a Matrix<Real> through one CKKS Message per (degree-wide) stored
-// chunk into an IPtMatrix. Only the first `slots` reals of every chunk are
-// meaningful under CI -- see the header comment in mlp_pcmm.hpp for why the
-// client-side Matrix is deliberately degree-wide rather than slots-wide.
 Ptr<IPtMatrix> encodeMatrix(const EnDecoder &encoder, const Matrix<Real> &m,
                             u32 level) {
     if (m.device() != Device::CPU)
@@ -97,10 +83,6 @@ Ptr<IPtMatrix> encodeMatrix(const EnDecoder &encoder, const Matrix<Real> &m,
     out->moveFrom(*bridge, rows, m.cols());
     return out;
 }
-
-//===========================================================================
-// Model
-//===========================================================================
 
 namespace {
 void writeFlat(std::ofstream &f, const std::vector<double> &v) {
@@ -147,12 +129,11 @@ RawModel readRawModel(const std::string &path) {
     return m;
 }
 
-
 Model buildModel(const std::vector<std::vector<double>> &W1,
                  const std::vector<double> &b1,
                  const std::vector<std::vector<double>> &W2,
                  const std::vector<double> &b2, const EnDecoder &coeff,
-                 const Levels &levels, u32 num_images, const Profile &p) {
+                 const Levels &levels, u32 num_images, const Profile &prof) {
     if (W1.size() != HIDDEN_DIM || W1[0].size() != INPUT_DIM ||
         b1.size() != HIDDEN_DIM)
         throw std::runtime_error("buildModel: W1/b1 shape mismatch");
@@ -163,103 +144,56 @@ Model buildModel(const std::vector<std::vector<double>> &W1,
     const u32 top = levels.top();
     Model model;
 
-    // U1~ [HIDDEN_DIM x IN_P] = [W1 | b1] @ fc1's input level. b1 rides as an
-    // extra weight column against the packed input's ones-row, so pcmm
-    // computes W1*X + b1 directly -- no separate plaintext add for fc1's bias.
-    Matrix<Real> u1(p.log_degree, HIDDEN_DIM, IN_P);
+    Matrix<Real> u1(prof.log_degree, HIDDEN_DIM, IN_P);
     for (u32 r = 0; r < HIDDEN_DIM; ++r) {
         for (u32 c = 0; c < INPUT_DIM; ++c)
             u1.at(r, c) = static_cast<Real>(W1[r][c]);
         u1.at(r, INPUT_DIM) = static_cast<Real>(b1[r]);
     }
-    model.u1 = encodeMatrix(coeff, u1, top - FC1_IN_DROP);
+    model.fc1_weights = encodeMatrix(coeff, u1, top - FC1_IN_DROP);
 
-    // U2 [LABEL_DIM x HIDDEN_DIM] = W2 @ fc2's input level (x^2's output).
-    Matrix<Real> u2(p.log_degree, LABEL_DIM, HIDDEN_DIM);
+    Matrix<Real> u2(prof.log_degree, LABEL_DIM, HIDDEN_DIM);
     for (u32 r = 0; r < LABEL_DIM; ++r)
         for (u32 c = 0; c < HIDDEN_DIM; ++c)
             u2.at(r, c) = static_cast<Real>(W2[r][c]);
-    model.u2 = encodeMatrix(coeff, u2, top - FC2_IN_DROP);
+    model.fc2_weights = encodeMatrix(coeff, u2, top - FC2_IN_DROP);
 
-    // b2 [LABEL_DIM x n_cols] @ fc2's OUTPUT level, added after fc2 rather
-    // than folded the way b1 was: that would need the ones-row carried past
-    // x^2, taking fc1's output (and with it x^2's batch and fc2's
-    // contraction) from HIDDEN_DIM to HIDDEN_DIM+1 rows for one bias vector.
-    // b2[r] is one constant over its row's slots, so its inverse DFT is a
-    // single nonzero coefficient at the head of each block -- exactly what a
-    // zero-filled Matrix already gives, so only that one entry per block is
-    // written.
-    const u32 degree = 1U << p.log_degree;
-    const u32 blocks = numBlocks(p, num_images);
-    Matrix<Real> b2m(p.log_degree, LABEL_DIM, blocks * degree);
+    const u32 degree = 1U << prof.log_degree;
+    const u32 blocks = numBlocks(prof, num_images);
+    Matrix<Real> b2m(prof.log_degree, LABEL_DIM, blocks * degree);
     for (u32 r = 0; r < LABEL_DIM; ++r)
         for (u32 blk = 0; blk < blocks; ++blk)
             b2m.at(r, blk * degree) = static_cast<Real>(b2[r]);
     auto b2_bridge = encodeMatrix(coeff, b2m, top - B2_DROP);
-    // eval.add() takes a plain IPlaintext, not an IPtMatrix -- HomEvalMatrix
-    // exposes only pcmm and rescale, so the addition itself runs through the
-    // same BatchRLWE bridge x^2 does (see inference()). moveTo keeps only the
-    // polynomial and its encoding, dropping the shape label, which is why
-    // b2_bridge may carry the Matrix width rather than the stored-coefficient
-    // one -- nothing downstream reads it after this line.
-    model.b2 = IPlaintext::make(PtxtType::BATCH);
-    b2_bridge->moveTo(*model.b2);
+    model.fc2_bias = IPlaintext::make(PtxtType::BATCH);
+    b2_bridge->moveTo(*model.fc2_bias);
 
     return model;
 }
 
-//===========================================================================
-// Client-side key material
-//===========================================================================
-
 Ptr<ISwKey> genRelinKey(const ISecretKey &sk, const Levels &levels,
-                        const Profile &p) {
+                        const Profile &prof) {
     const u32 top = levels.top();
-    const bool conj_inv = (p.ntt_alg == NTTAlgorithm::CYC_FOR_CI);
+    const bool conj_inv = (prof.ntt_alg == NTTAlgorithm::CYC_FOR_CI);
 
     paramsUtils::SwKeyGenParamsBuilder sb;
     sb.setNoiseDistribution(DiscreteGaussian(NOISE_STDDEV));
-    // The key lives in whatever ring sk actually reports -- querying it
-    // directly (rather than hand-deriving a ring degree) is what the HS
-    // scheme's client_key_generation does too, and empirically it is the
-    // choice that produces working ciphertexts under CI.
-    sb.setRing(sk.logDegree(), p.poly_type);
-    // The budget is a separate, independent bound: how many bits of raised
-    // modulus the key's actual entropy can support. PCMM's key is sampled
-    // directly at the profile's log_degree (no lifting), and CI samples only
-    // half its coefficients, so that entropy is logRlweDim(p)'s, not the
-    // degree's. Under NORMAL the two are the same number.
-    sb.setModUpPrimes(mlp::maxBits128(logRlweDim(p)), SWK_MARGIN);
+    sb.setRing(sk.logDegree(), prof.poly_type);
+    sb.setModUpPrimes(mlp::maxBits128(logRlweDim(prof)), SWK_MARGIN);
 
     return SwKeyGenerator(sb.build(levels.mods[top - SQUARE_OUT_DROP], conj_inv))
         .genRelinKey(sk);
 }
 
-//===========================================================================
-// The section-6.3 relabeling bridge
-//===========================================================================
-
-void setDFT(ICtMatrix &ct, bool dft, u32 num_images, const Profile &p) {
+void setDFT(ICtMatrix &ct, bool dft, u32 num_images, const Profile &prof) {
     const u32 rows = ct.rows();
     auto bridge = ICiphertext::make(EncType::BatchRLWE);
     ct.moveTo(*bridge);
     HomEvalFlexible{}.setDFT(*bridge, dft);
-    // Coeff- and slot-encoded columns are counted in different units under
-    // CI: a coeff-encoded block stores ringDim() = degree/2 coefficients,
-    // its slot-encoded relabeling the full degree (the DFT the library
-    // performs implicitly on read/write is what accounts for the other
-    // half). moveFrom only bounds-checks against the coefficient capacity of
-    // the ring, so either label fits; picking the true one here just keeps
-    // ct's own reported .cols() meaningful to the next caller.
-    // Under NORMAL, ringDim(p) is the full degree and the two labels coincide.
-    const u32 blocks = numBlocks(p, num_images);
-    const u32 cols = blocks * (dft ? (1U << p.log_degree) : ringDim(p));
+    const u32 blocks = numBlocks(prof, num_images);
+    const u32 cols = blocks * (dft ? (1U << prof.log_degree) : ringDim(prof));
     ct.moveFrom(*bridge, rows, cols);
 }
-
-//===========================================================================
-// ICtMatrix <-> file
-//===========================================================================
 
 void saveCtMatrix(const std::string &path, ICtMatrix &ct) {
     auto bridge = ICiphertext::make(EncType::BatchRLWE);
@@ -275,57 +209,42 @@ Ptr<ICtMatrix> loadCtMatrix(const std::string &path, u32 rows, u32 cols,
     return ct;
 }
 
-//===========================================================================
-// Online inference
-//===========================================================================
-
-void inference(const Model &model, const ISwKey &relin_key,
-               const ICtMatrix &cx, ICtMatrix &cy, const Levels &levels,
-               u32 num_images, const Profile &p) {
-    const u32 n_cols = numCols(p, num_images);
+void inference(const Model &model, const ISwKey &relin_key, const ICtMatrix &cx,
+               ICtMatrix &cy, const Levels &levels, u32 num_images,
+               const Profile &prof) {
+    const u32 n_cols = numCols(prof, num_images);
     HomEvalMatrix mm{HomEvalParams{levels}};
     HomEval he{HomEvalParams{levels}};
 
-    // ----- fc1: U1~ * X~ -> W1 X + b1 -----
     auto ch1 = ICtMatrix::make();
-    mm.pcmm(*model.u1, cx, *ch1);
+    mm.pcmm(*model.fc1_weights, cx, *ch1);
     mm.rescale(*ch1, *ch1, /*r_ntt=*/true);
 
-    // ----- x^2: tensor -> rescale -> relin (rescale first, so the relin key
-    // sits one level lower than the usual tensor->relin->rescale order --
-    // see the SQUARE_OUT_DROP comment in mlp_params.hpp). backwardNTT lands
-    // the result in the coefficient domain pcmm requires. -----
     auto hb = ICiphertext::make(EncType::BatchRLWE);
     ch1->moveTo(*hb);
     auto sq = ICiphertext::make(EncType::BatchRLWE);
     he.tensor(*hb, *hb, *sq);
+    // Rescale before relinearizing, so the key switch runs one level down.
     he.rescale(*sq, *sq);
     he.relin(*sq, relin_key);
     he.backwardNTT(*sq, *sq);
     auto ch2 = ICtMatrix::make();
     ch2->moveFrom(*sq, HIDDEN_DIM, n_cols);
 
-    // ----- fc2: U2 * h^2 -> logits -----
-    mm.pcmm(*model.u2, *ch2, cy);
+    mm.pcmm(*model.fc2_weights, *ch2, cy);
     mm.rescale(cy, cy);
 
-    // ----- +b2: plaintext add through the same BatchRLWE bridge, since
-    // HomEvalMatrix exposes only pcmm and rescale. -----
     auto cyb = ICiphertext::make(EncType::BatchRLWE);
     cy.moveTo(*cyb);
-    he.add(*cyb, *model.b2, *cyb);
+    he.add(*cyb, *model.fc2_bias, *cyb);
     cy.moveFrom(*cyb, LABEL_DIM, n_cols);
 }
 
-//===========================================================================
-// Client-side output unpacking
-//===========================================================================
-
 std::vector<std::vector<double>> unpackLogits(const Matrix<Real> &yc,
                                               u32 num_images,
-                                              const Profile &p) {
-    const u32 degree = 1U << p.log_degree;
-    const u32 slots = slotsPerMsg(p); // must mirror packImages exactly
+                                              const Profile &prof) {
+    const u32 degree = 1U << prof.log_degree;
+    const u32 slots = slotsPerMsg(prof);
     std::vector<std::vector<double>> logits(num_images,
                                             std::vector<double>(LABEL_DIM));
     for (u32 img = 0; img < num_images; ++img) {

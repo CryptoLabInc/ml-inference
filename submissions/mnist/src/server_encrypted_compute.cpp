@@ -3,22 +3,6 @@
 // This software is licensed under the terms of the Apache v2 License.
 // See the LICENSE.md file for details.
 //============================================================================
-//
-// Stage 7: the encrypted inference. Everything the model computes happens
-// here, on ciphertext. Dispatches on instance size (mlp::usePcmm):
-//
-//   HS (single):               fc1 matvec -> fold -> +b1 -> x^2 -> rescale ->
-//                               fc2 matvec -> +b2
-//   PCMM (small/medium/large): fc1 pcmm+b1 -> x^2 -> rescale -> fc2 pcmm -> +b2
-//
-// The server holds no secret key in either scheme. It loads the evaluation
-// keys the client published and the cleartext model it owns.
-//
-// Setup (loading keys, and -- scheme-dependently -- constructing the two
-// MatrixVectorEvals or encoding U1/U2/b2, both of which need the instance
-// size) is timed separately from evaluation, and both are reported through
-// io/<size>/server_reported_steps.json. Stage 3 could not do this setup: it
-// never learns the instance size. See "Stage split" in DESIGN.md.
 
 #include "mlp_pcmm.hpp"
 #include "mlp_pipeline.hpp"
@@ -38,14 +22,6 @@ using namespace mlp;
 
 namespace {
 
-// Elapsed seconds, synchronizing the device at both ends so a GPU timing
-// measures work *completed* rather than kernels *launched*. HEaaN2 kernel
-// launches are asynchronous: without the sync the evaluation timer closes
-// while the GPU is still working, and the stage under-reports by an order of
-// magnitude (the cost then silently surfaces in whatever forces completion
-// next -- here the result serialization, which the harness still counts). The
-// library's own mlp benchmarks sync for the same reason, so this also keeps
-// the two sets of numbers comparable.
 class Timer {
 public:
     Timer() {
@@ -70,15 +46,6 @@ private:
 
 constexpr const char *CACHE_DIR = MODEL_CACHE_DIR;
 
-// One full discarded inference pass before the timed evaluation, the same
-// warm-up HEaaN2's own mlp benchmarks run: the first use of each CUDA kernel
-// pays module loading, the first allocation grows the memory pool, and the
-// NTT workspace is built lazily. Without it those one-time costs land inside
-// the timed evaluation and the reported number is not comparable to a warm
-// server (or to HEaaN2's benchmark figures). The harness times this stage as
-// one process, so the warm-up does not move any cost out of the harness's
-// "Encrypted computation" -- it costs about one extra warm evaluation there,
-// and is reported as its own line in server_reported_steps.json.
 struct StageTimes {
     double setup_s = 0.0;
     double warmup_s = 0.0;
@@ -92,8 +59,6 @@ StageTimes runHS(const InstanceParams &prms, Device dev) {
     const u32 top = levels.top();
     const EnDecoder encoder = makeEncoder(levels);
     const HomEval eval{HomEvalParams{levels}};
-    // adjust() lives on HomEvalFlexible; it is stateless and cannot be merged
-    // with HomEval, whose 3-argument tensor() the 4-argument one would hide.
     const HomEvalFlexible flex;
 
     const u32 fc1_in = top - FC1_IN_DROP, fc1_out = top - FC1_OUT_DROP;
@@ -106,25 +71,22 @@ StageTimes runHS(const InstanceParams &prms, Device dev) {
     auto relin_key = serial::loadAsPtr<ISwKey>(
         (prms.pubkeydir() / RELIN_KEY_FILE).string(), dev);
 
-    const auto w1 = readLayerWeights(FC1, std::string(CACHE_DIR) + "/fc1.bin");
-    const auto w2 = readLayerWeights(FC2, std::string(CACHE_DIR) + "/fc2.bin");
+    const auto raw =
+        pcmm::readRawModel(std::string(CACHE_DIR) + "/pcmm.bin");
 
-    // The diagonals were encoded by server_preprocess_model (stage 3), which
-    // needs no keys to do it; this stage only binds the rotation keys to them.
     const auto enc1 = serial::load<MatrixVectorEvalEncoded>(
         std::string(CACHE_DIR) + "/fc1_diags.bin", dev);
     const auto enc2 = serial::load<MatrixVectorEvalEncoded>(
         std::string(CACHE_DIR) + "/fc2_diags.bin", dev);
 
-    // fc1's fold keys; fc2 does not fold and takes none.
     auto fold_keys = serial::load<RotKeyPtrs>(
         (prms.pubkeydir() / ROT_KEY_FOLD_FILE).string(), dev);
 
-    const Layer fc1 = makeLayer(FC1, w1.b, enc1, levels, fc1_in, fc1_out,
+    const Layer fc1 = makeLayer(FC1, raw.b1, enc1, levels, fc1_in, fc1_out,
                                 encoder, std::move(rot_fc1),
                                 std::move(relin_key), dev,
                                 std::move(fold_keys));
-    const Layer fc2 = makeLayer(FC2, w2.b, enc2, levels, fc2_in, fc2_out,
+    const Layer fc2 = makeLayer(FC2, raw.b2, enc2, levels, fc2_in, fc2_out,
                                 encoder, std::move(rot_fc2), KeyPtr{}, dev);
 
     StageTimes tm;
@@ -133,8 +95,6 @@ StageTimes runHS(const InstanceParams &prms, Device dev) {
     fs::create_directories(prms.ctxtdowndir());
     const size_t n_ct = numCtxts(prms.getBatchSize());
 
-    // Warm-up on a throwaway reload of the first input ciphertext; the result
-    // is discarded, so re-running the real inputs afterwards stays correct.
     {
         const Timer t_warm;
         auto warm = serial::loadAsPtr<ICiphertext>(
@@ -191,8 +151,6 @@ StageTimes runPcmm(const InstanceParams &prms, Device dev, InstanceSize size) {
         (prms.ctxtupdir() / pcmm::INPUT_CTMATRIX_FILE).string(), pcmm::IN_P,
         pcmm::numCols(prof, num_images), dev);
 
-    // Warm-up: same inference on the real input (which inference() does not
-    // modify), result discarded.
     {
         const Timer t_warm;
         auto warm = ICtMatrix::make();

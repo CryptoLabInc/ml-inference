@@ -3,16 +3,6 @@
 # This software is licensed under the terms of the Apache v2 License.
 # See the LICENSE.md file for details.
 # ---------------------------------------------------------------------------
-# HEaaN2 MNIST MLP submission.
-#
-# Built against the HEaaN2 *public* API only -- this repo carries none of
-# HEaaN2's own implementation source. It does carry a prebuilt HEaaN2 install
-# (public headers + libheaan2.so.0.2.0) vendored under install/, the same
-# pattern CryptoLab's own Zn-multiplication fhe-benchmarking submission uses;
-# see LICENSE and LICENSE-THIRD-PARTY in this directory. That means a bare
-# clone of this fork builds with no private-repo access or SSH key needed.
-# Point CMAKE_PREFIX_PATH elsewhere (scripts/build_task.sh does this from
-# $HEAAN2_DIR / $HEAAN2_ROOT) to use a different install or build from source.
 
 cmake_minimum_required(VERSION 3.23)
 project(
@@ -38,7 +28,6 @@ option(BUILD_WITH_CUDA "Build the submission against the CUDA HEaaN2 backend" ON
 find_package(HEaaN2 REQUIRED)
 find_package(OpenMP REQUIRED)
 
-# --- shared pipeline -------------------------------------------------------
 add_library(mlp_pipeline STATIC src/mlp_pipeline.cpp src/mlp_pcmm.cpp)
 target_include_directories(mlp_pipeline PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(mlp_pipeline PUBLIC HEaaN2::HEaaN2 OpenMP::OpenMP_CXX)
@@ -46,18 +35,12 @@ set_target_properties(mlp_pipeline PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 if(BUILD_WITH_CUDA)
   find_package(CUDAToolkit REQUIRED)
-  # libheaan2.so has DT_NEEDED on the *shared* libcudart.so.12/libcublas.so.12
-  # and does not re-export them (its interface carries only OpenMP), so the
-  # static cudart cannot resolve its symbols -- link the shared pair here.
   target_link_libraries(mlp_pipeline PUBLIC CUDA::cudart CUDA::cublas)
-  # Selects Device::GPU_CUDA in mlp::targetDevice().
   target_compile_definitions(mlp_pipeline PUBLIC MLP_WITH_CUDA)
 endif()
 
-# --- the seven stage executables -------------------------------------------
-# These names are the benchmark contract: harness/utils.py resolves each stage
-# to submissions/mnist/build/<name> and SILENTLY SKIPS a stage whose binary is
-# missing. Do not rename any of them.
+# Stage names are the benchmark contract: harness/utils.py resolves each stage
+# to submissions/mnist/build/<name> and silently skips a missing binary.
 set(MLP_STAGES
     client_key_generation
     client_preprocess_input
@@ -70,16 +53,8 @@ set(MLP_STAGES
 foreach(stage ${MLP_STAGES})
   add_executable(${stage} src/${stage}.cpp)
   target_link_libraries(${stage} PRIVATE mlp_pipeline)
-  # The harness runs the binaries straight out of build/, with no
-  # LD_LIBRARY_PATH set, so the HEaaN2 location has to be baked in.
   set_target_properties(${stage} PROPERTIES
     BUILD_WITH_INSTALL_RPATH FALSE
     INSTALL_RPATH_USE_LINK_PATH TRUE)
-  # ...and baked in as DT_RPATH rather than the modern default DT_RUNPATH.
-  # libheaan2.so needs libcudart/libcublas/libtcmalloc but carries no RPATH of
-  # its own -- HEaaN2's install rules run file(RPATH_REMOVE) on it -- and
-  # DT_RUNPATH is deliberately NOT consulted when resolving a *dependency's*
-  # dependencies, so the loader would fail on those three. DT_RPATH is
-  # inherited down the whole chain, which covers them.
   target_link_options(${stage} PRIVATE "LINKER:--disable-new-dtags")
 endforeach()
