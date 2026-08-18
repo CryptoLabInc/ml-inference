@@ -25,12 +25,6 @@ harness/cifar10/__pycache__/
 *.so
 *.dylib
 *.dll
-# ...but the vendored HEaaN2 install is a redistributed artifact, not a build
-# output. Only the versioned file escapes the *.so rule above; without this the
-# libheaan2.so -> libheaan2.so.0.2.0 symlink is silently dropped from a clone.
-# (Nothing in this submission needs it -- both the SONAME and CMake's
-# IMPORTED_LOCATION name the versioned file -- but anything linking -lheaan2
-# by hand would.)
 !submissions/mnist/install/lib/*.so
 
 # Fortran module files
