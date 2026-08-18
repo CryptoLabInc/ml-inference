@@ -10,7 +10,7 @@
 // CONSTANTS ARE THE CONTEXT: if two stages disagree on any of them, keys and
 // ciphertexts stop matching. Nothing here may be changed for one stage alone.
 //
-// The circuit is the BN-folded 2-layer MLP described in weights/manifest.txt:
+// The circuit is the BN-folded 2-layer MLP described in the submission README:
 //
 //     fc1 (128x484, +b1)  ->  x^2  ->  fc2 (10x128, +b2)
 //

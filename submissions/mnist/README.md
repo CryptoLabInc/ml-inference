@@ -21,8 +21,7 @@ fc1 (128×484, +b1)  →  x²  →  fc2 (10×128, +b2)
 A BatchNorm-folded 2-layer MLP, identical for both schemes. `x²` is the  with which the network was
 **trained**, not a polynomial approximation of ReLU, so the circuit evaluates the model
 exactly — the only error is CKKS noise (measured: max |decrypted − plaintext logit| = 0.109 on
-logits spanning [−32, +14]). Weights are row-major CSV in [`weights/`](weights/); shapes,
-normalization and provenance in [`weights/manifest.txt`](weights/manifest.txt). Folded plaintext
+logits spanning [−32, +14]). Weights are row-major CSV in [`weights/`](weights/). Folded plaintext
 accuracy is 97.96%.
 
 ### Cleartext pre- and post-processing
