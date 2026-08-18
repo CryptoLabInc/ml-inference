@@ -224,6 +224,7 @@ void inference(const Model &model, const ISwKey &relin_key, const ICtMatrix &cx,
     ch1->moveTo(*hb);
     auto sq = ICiphertext::make(EncType::BatchRLWE);
     he.tensor(*hb, *hb, *sq);
+    // Rescale before relinearizing, so the key switch runs one level down.
     he.rescale(*sq, *sq);
     he.relin(*sq, relin_key);
     he.backwardNTT(*sq, *sq);

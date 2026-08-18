@@ -59,6 +59,9 @@ heaan::Ptr<heaan::ISwKey> genRelinKey(const heaan::ISecretKey &sk,
                                       const heaan::Levels &levels,
                                       const Profile &prof);
 
+// Flip the slot-encoded (dft) flag, which is just a metadata.
+// PCMM rejects slot-encoded operands, so the input is flipped before the
+// GEMMs and the flipped back before decoding.
 void setDFT(heaan::ICtMatrix &ct, bool dft, u32 num_images,
             const Profile &prof);
 
