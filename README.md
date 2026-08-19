@@ -1,27 +1,26 @@
 # FHE Benchmarking Suite — ML Inference: CryptoLab HEaaN2 submission
 
-This fork is a submission for the [HomomorphicEncryption.org](https://www.HomomorphicEncryption.org)
-`ml-inference` benchmark (`--dataset mnist`) by **CryptoLab, Inc.**, built on
-[HEaaN2](https://heaan.io), CryptoLab's CKKS library. The harness is unmodified; the submission
-replaces the reference OpenFHE implementation under [`submissions/mnist/`](submissions/mnist/).
+A submission for the [HomomorphicEncryption.org](https://www.HomomorphicEncryption.org)
+`ml-inference` benchmark (`--dataset mnist`) by CryptoLab, Inc., built on
+[HEaaN2](https://heaan.io), CryptoLab's CKKS library. The submission lives under
+[`submissions/mnist/`](submissions/mnist/).
 
-- **Everything about the submission** — design, parameters, security, build, run, results:
+The model is a two-layer MLP, `fc1(128×484) → x² → fc2(10×128)`, over a 484-dimensional
+center-cropped input. Two CKKS circuits evaluate it, picked depending on the instance size: a Halevi–Shoup
+rotation-folded matvec at size 0, and a PCMM (GEMM-based) circuit at sizes 1–3.
+
+- Design, parameters, security, build, run and results:
   [submissions/mnist/README.md](submissions/mnist/README.md)
-- **Building requires an sm_120 GPU** — see the
-  [pre-flight check](submissions/mnist/README.md#-this-submission-requires-an-sm_120-gpu)
-- Upstream harness documentation: [fhe-benchmarking/ml-inference](https://github.com/fhe-benchmarking/ml-inference)
-
-Two CKKS circuits evaluate the same 2-layer MLP (`fc1(128×484) → x² → fc2(10×128)`), chosen by
-instance size alone: a Halevi–Shoup rotation-folded matvec at size 0, a PCMM (GEMM-based)
-circuit at sizes 1–3. The model deviates from the harness's own
-(`784→128→64→10` with ReLU): two layers instead of three, `x²` instead of ReLU, and a 484-dim
-center-cropped input, trained separately.
+- Building requires an sm_120 GPU. See the
+  [pre-flight check](submissions/mnist/README.md#-this-submission-requires-an-sm_120-gpu).
+- Upstream harness documentation:
+  [fhe-benchmarking/ml-inference](https://github.com/fhe-benchmarking/ml-inference)
 
 ## Benchmark results
 
-Measured on **1× NVIDIA RTX 5090 (sm_120)**, seed 3, through the unmodified harness
-(`python3 harness/run_submission.py <size> --num_runs 3`); the committed files under
-[`measurements/`](measurements/) are the three-run results the leaderboard averages.
+Measured on one NVIDIA RTX 5090 (sm_120) with seed 3, running
+`python3 harness/run_submission.py <size> --num_runs 3`. The files under
+[`measurements/`](measurements/) hold the three runs that the leaderboard averages.
 
 | | size 0 (1) HS | sizes 1–2 (100 / 1000) PCMM | size 3 (10000) PCMM |
 | --- | --- | --- | --- |
@@ -36,19 +35,17 @@ Measured on **1× NVIDIA RTX 5090 (sm_120)**, seed 3, through the unmodified har
 | **Accuracy** | PASS | 0.980 / 0.989 | 0.9796 |
 | Harness plaintext model | n/a | 0.960 / 0.981 | 0.9779 |
 
-***`Encrypted computation` is the number that the benchmark scores.** The indented rows below it are
-the submission's own timers and do not sum to it; see
-[Results](submissions/mnist/README.md#results) for what they measure and for the full breakdown.*
+`Encrypted computation` is the number the benchmark scores. The indented rows under it are the
+submission's own timers and do not sum to it;
+[Results](submissions/mnist/README.md#results) covers what each one measures.
 
-*At size 0 the Halevi–Shoup diagonal encoding runs in `Encrypted model preprocessing`
-([`server_preprocess_model.cpp`](submissions/mnist/src/server_preprocess_model.cpp)) instead: it
-depends only on the weights, never on the input. That is why `Encrypted computation` reads 0.371 s
-and not ~2.5 s — the work moved to an earlier stage rather than disappearing. Quote the two rows
-together for a cold single-shot latency.*
+At size 0 the Halevi–Shoup diagonal encoding runs in `Encrypted model preprocessing`
+[`server_preprocess_model.cpp`](submissions/mnist/src/server_preprocess_model.cpp). That is why `Encrypted computation` reads 0.371 s here rather than
+about 2.5 s. For a cold single-shot latency, add the two rows together.
 
 ## License
 
-The repository is Apache-2.0 (see [LICENSE.md](LICENSE.md)). The prebuilt HEaaN2 library vendored
-at [`submissions/mnist/install/`](submissions/mnist/install/) is proprietary to CryptoLab, Inc. and
+The repository is Apache-2.0; see [LICENSE.md](LICENSE.md). The prebuilt HEaaN2 library under
+[`submissions/mnist/install/`](submissions/mnist/install/) is proprietary to CryptoLab, Inc. and is
 redistributed for benchmark verification only, under
 [submissions/mnist/LICENSE](submissions/mnist/LICENSE).
