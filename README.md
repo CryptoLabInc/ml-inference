@@ -40,7 +40,8 @@ Measured on **1× NVIDIA RTX 5090 (sm_120)**, seed 3, through the unmodified har
 the submission's own timers and do not sum to it; see
 [Results](submissions/mnist/README.md#results) for what they measure and for the full breakdown.*
 
-*At size 0 the Halevi–Shoup diagonal encoding runs in `Encrypted model preprocessing` instead: it
+*At size 0 the Halevi–Shoup diagonal encoding runs in `Encrypted model preprocessing`
+([`server_preprocess_model.cpp`](submissions/mnist/src/server_preprocess_model.cpp)) instead: it
 depends only on the weights, never on the input. That is why `Encrypted computation` reads 0.371 s
 and not ~2.5 s — the work moved to an earlier stage rather than disappearing. Quote the two rows
 together for a cold single-shot latency.*
