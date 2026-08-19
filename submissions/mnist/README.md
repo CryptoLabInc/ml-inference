@@ -1,6 +1,6 @@
 # Workload implementation — MNIST ML inference
 
-This is a submission for the `ml-inference` workload (`--dataset mnist`) by CryptoLab Inc., written
+This is a submission for the `ml-inference` workload (`--dataset mnist`) by CryptoLab, Inc., written
 in C++ and using the [HEaaN2](https://heaan.io) CKKS library. It replaces the reference
 OpenFHE/HEIR implementation in this directory; the harness is unmodified. A prebuilt HEaaN2 is
 vendored in [`install/`](install/), so the build needs no HEaaN2 source and no private-repo access.
@@ -230,6 +230,6 @@ Submission code (`src/`, `include/`, `CMakeLists.txt`, `weights/`) is Apache-2.0
 repository. It uses only HEaaN2's public API — no HEaaN2 implementation source is in this repo.
 
 [`install/`](install/) carries a **prebuilt** HEaaN2 (public headers + `libheaan2.so.0.2.0`),
-proprietary to CryptoLab Inc. and **not** Apache-2.0. It is redistributed under [LICENSE](LICENSE),
+proprietary to CryptoLab, Inc. and **not** Apache-2.0. It is redistributed under [LICENSE](LICENSE),
 which permits use solely for reproducing and verifying benchmark results. Its dependencies are
 listed in [LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY).

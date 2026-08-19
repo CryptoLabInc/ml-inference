@@ -1,7 +1,7 @@
 # FHE Benchmarking Suite — ML Inference: CryptoLab HEaaN2 submission
 
 This fork is a submission for the [HomomorphicEncryption.org](https://www.HomomorphicEncryption.org)
-`ml-inference` benchmark (`--dataset mnist`) by **CryptoLab Inc.**, built on
+`ml-inference` benchmark (`--dataset mnist`) by **CryptoLab, Inc.**, built on
 [HEaaN2](https://heaan.io), CryptoLab's CKKS library. The harness is unmodified; the submission
 replaces the reference OpenFHE implementation under [`submissions/mnist/`](submissions/mnist/).
 
@@ -59,6 +59,6 @@ what the circuit costs once a server is warm. See
 ## License
 
 The repository is Apache-2.0 (see [LICENSE.md](LICENSE.md)). The prebuilt HEaaN2 library vendored
-at [`submissions/mnist/install/`](submissions/mnist/install/) is proprietary to CryptoLab Inc. and
+at [`submissions/mnist/install/`](submissions/mnist/install/) is proprietary to CryptoLab, Inc. and
 redistributed for benchmark verification only, under
 [submissions/mnist/LICENSE](submissions/mnist/LICENSE).
