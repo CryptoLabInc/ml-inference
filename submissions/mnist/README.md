@@ -1,7 +1,7 @@
 # Workload implementation — MNIST ML inference
 
 This is a submission for the `ml-inference` workload (`--dataset mnist`) by CryptoLab Inc., written
-in C++ and using the [HEaaN2](https://heaan.io) CKKS library. It replaces the reference
+in C++ and using the pre-release [HEaaN2](https://heaan.io) CKKS library. It replaces the reference
 OpenFHE/HEIR implementation in this directory; the harness is unmodified. A prebuilt HEaaN2 is
 vendored in [`install/`](install/), so the build needs no HEaaN2 source and no private-repo access.
 
@@ -200,28 +200,27 @@ names, `<size>` as the only argument) is unchanged.
 
 Seed 3, through the **unmodified harness**, on 1× NVIDIA RTX 5090 (sm_120). Every figure is the
 mean of the three runs committed under [`measurements/`](../../measurements/), taken with the
-stage-7 warm-up and timer synchronization in place, on hardware that passes the
+warm-up and timer synchronization in place, on hardware that passes the
 [architecture check](#-this-submission-requires-an-sm_120-gpu). That check is a precondition for
 quoting any timing here: on a mismatched GPU the first run absorbs several seconds of just-in-time
 compilation and reports it as evaluation time.
 
-| | size 0 (1) HS | size 1 (100) PCMM | size 2 (1000) PCMM | size 3 (10000) PCMM |
-| --- | --- | --- | --- | --- |
-| harness `Encrypted model preprocessing` | 2.15 s | — | 0.068 s | 0.071 s |
-| harness `Encrypted computation` | 0.41 s | — | 0.44 s | 0.56 s |
-| ├─ model setup | 0.116 s | — | 0.051 s | 0.050 s |
-| ├─ warm-up (discarded) | 0.017 s | — | 0.032 s | 0.033 s |
-| └─ evaluation | **0.76 ms** | — | **0.91 ms** | **2.63 ms** |
-| Public + evaluation keys | 44.9 M | — | 54.0 K | 54.0 K |
-| Encrypted input | 420 K | — | 44.5 M | 133.6 M |
-| Encrypted results | 120 K | — | 280 K | 840 K |
-| **Accuracy** | PASS | — | 0.989 | 0.979 |
-| Harness plaintext model | — | — | 0.981 | 0.978 |
+| | size 0 (1) HS | sizes 1–2 (100 / 1000) PCMM | size 3 (10000) PCMM |
+| --- | --- | --- | --- |
+| Harness `Encrypted model preprocessing` | 2.094 s | 0.058 s / 0.070 s | 0.068 s |
+| Harness `Encrypted computation` | 0.371 s | 0.416 s / 0.417 s | 0.521 s |
+| ├─ model setup | 0.090 s | 0.046 s | 0.058 s |
+| ├─ warm-up (discarded) | 0.013 s | 0.028 s | 0.012 s |
+| └─ evaluation | **0.70 ms** | **0.80 ms** | **3.40 ms** |
+| Public + evaluation keys | 44.9 M | 108.5 K | 320.5 K |
+| Encrypted input | 420 K | 51.2 M | 242.5 M |
+| Encrypted results | 120 K | 350.1 K | 1.8 M |
+| **Accuracy** | PASS | 0.980 / 0.989 | 0.9796 |
+| Harness plaintext model | n/a | 0.960 / 0.981 | 0.9779 |
 
-The stage-7 sub-rows do not sum to the scored figure: the harness times the whole stage-7 *process*,
+The `Encrypted computation` sub-rows do not sum to the scored figure: the harness times the whole *process*,
 so it also carries ~0.25 s of interpreter and CUDA-context startup and ciphertext I/O that sits
-outside the submission's own timers. Accuracy varies in the third decimal run to run from
-encryption noise (size 3 measured 0.9793–0.9798); the table rounds. The harness plaintext row is
+outside the submission's own timers. The harness plaintext row is
 the harness's own model on the same subset — the encrypted model scores at or above it at every
 size.
 

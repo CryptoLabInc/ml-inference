@@ -23,17 +23,18 @@ Measured on **1× NVIDIA RTX 5090 (sm_120)**, seed 3, through the unmodified har
 (`python3 harness/run_submission.py <size> --num_runs 3`); the committed files under
 [`measurements/`](measurements/) are the three-run results the leaderboard averages.
 
-| | size 0 (single, 1) | size 1 (small, 100) | size 2 (medium, 1000) | size 3 (large, 10000) |
-| --- | ---: | ---: | ---: | ---: |
-| Circuit | Halevi–Shoup | PCMM | PCMM | PCMM |
-| Encrypted model preprocessing | 2.15 s | — | 0.07 s | 0.07 s |
-| Encrypted computation | **0.41 s** | — | **0.44 s** | **0.56 s** |
-| └─ warm evaluation, server-reported | **0.76 ms** | — | **0.91 ms** | **2.63 ms** |
-| Total latency | 9.40 s | — | 9.62 s | 16.30 s |
-| Public + evaluation keys | 44.9 M | — | 54.0 K | 54.0 K |
-| Encrypted input | 420 K | — | 44.5 M | 133.6 M |
-| Encrypted results | 120 K | — | 280 K | 840 K |
-| Accuracy | PASS | — | 0.989 | 0.979 |
+| | size 0 (1) HS | sizes 1–2 (100 / 1000) PCMM | size 3 (10000) PCMM |
+| --- | --- | --- | --- |
+| Harness `Encrypted model preprocessing` | 2.094 s | 0.058 s / 0.070 s | 0.068 s |
+| Harness `Encrypted computation` | 0.371 s | 0.416 s / 0.417 s | 0.521 s |
+| ├─ model setup | 0.090 s | 0.046 s | 0.058 s |
+| ├─ warm-up (discarded) | 0.013 s | 0.028 s | 0.012 s |
+| └─ evaluation | **0.70 ms** | **0.80 ms** | **3.40 ms** |
+| Public + evaluation keys | 44.9 M | 108.5 K | 320.5 K |
+| Encrypted input | 420 K | 51.2 M | 242.5 M |
+| Encrypted results | 120 K | 350.1 K | 1.8 M |
+| **Accuracy** | PASS | 0.980 / 0.989 | 0.9796 |
+| Harness plaintext model | n/a | 0.960 / 0.981 | 0.9779 |
 
 *(`Encrypted computation` and `Total latency` are means of the three committed runs; model
 preprocessing and key generation are measured once per size. Accuracy varies in the third decimal
@@ -41,16 +42,15 @@ across runs from encryption noise. Size 1 moved from Halevi–Shoup to PCMM afte
 measurements were taken; its column is cleared pending re-measurement rather than carrying over
 figures for a circuit it no longer runs.)*
 
-*At size 0 the Halevi–Shoup circuit's diagonal encoding runs in stage 3 (`Encrypted model
-preprocessing`), not inside the timed stage 7: it depends only on the weights, never on the input.
+*At size 0 the Halevi–Shoup circuit's diagonal encoding runs in [`client_preprocess_input.cpp`](submissions/mnist/src/client_preprocess_input.cpp), not inside the timed [`server_encrypted_compute.cpp`](submissions/mnist/src/server_encrypted_compute.cpp): it depends only on the weights, never on the input.
 That is why `Encrypted computation` is 0.41 s rather than the ~2.5 s it would otherwise be — the
-work moved out of the scored stage rather than disappearing. Quote the two rows together for a
+work moved out of the scored time rather than disappearing. Quote the two rows together for a
 cold single-shot latency.*
 
 *The **warm evaluation** row is the submission's own timer around the homomorphic inference alone,
 reported per run in the `Server Reported` block of each
 [`measurements/`](measurements/) file. It is a sub-figure of `Encrypted computation`, not an
-alternative to it: the harness times stage 7 as a whole process, so the scored figure also carries
+alternative to it: the harness times [`server_encrypted_compute.cpp`](submissions/mnist/src/server_encrypted_compute.cpp) as a whole process, so the scored figure also carries
 key loading, process and CUDA start-up and ciphertext I/O, and the arithmetic itself is well under
 1% of it. **`Encrypted computation` is the number the benchmark scores**; the evaluation row is
 what the circuit costs once a server is warm. See
