@@ -16,10 +16,8 @@ No bootstrapping in either.
 fc1 (128×484, +b1)  →  x²  →  fc2 (10×128, +b2)
 ```
 
-A BatchNorm-folded 2-layer MLP, identical for both schemes. `x²` is the activation with which the
-network was **trained**, not a polynomial approximation of ReLU, so the circuit evaluates the model
-exactly — the only error is CKKS noise (measured: max |decrypted − plaintext logit| = 0.109 on
-logits spanning [−32, +14]). Replacing ReLU with a low-degree polynomial activation follows AESPA (Park et al.,
+`x²` is the activation with which the
+network was trained, following the idea of AESPA (Park et al.,
 [arXiv:2201.06699](https://arxiv.org/abs/2201.06699)). Weights are row-major CSV in
 [`weights/`](weights/). Folded plaintext accuracy is 97.96%.
 
