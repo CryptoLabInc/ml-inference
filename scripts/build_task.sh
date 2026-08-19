@@ -5,6 +5,8 @@
 #
 # This software is licensed under the terms of the Apache v2 License.
 # See the LICENSE.md file for details.
+#
+# Modified 2026 by CryptoLab, Inc.: build steps for the HEaaN2 MNIST submission.
 
 # Usage: ./scripts/build_task.sh <TASK_DIR>(/submissions/mnist)
 set -euo pipefail
