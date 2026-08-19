@@ -16,10 +16,13 @@ in the build/run environment separately):
   Exception. https://gcc.gnu.org/onlinedocs/libgomp/
 - gperftools `tcmalloc` (`libtcmalloc.so.4`) — BSD 3-Clause License.
   https://github.com/gperftools/gperftools
-- NVIDIA CUDA Runtime and cuBLAS (`libcudart.so.12`, `libcublas.so.12`) — proprietary, under the
-  NVIDIA CUDA Toolkit End User License Agreement. Obtained separately via the CUDA Toolkit; not
-  bundled with this submission. https://docs.nvidia.com/cuda/eula/
+- NVIDIA CUDA Runtime, cuBLAS and cuBLASLt (`libcudart.so.12`, `libcublas.so.12`,
+  `libcublasLt.so.12`) — proprietary, under the NVIDIA CUDA Toolkit End User License Agreement.
+  Obtained separately via the CUDA Toolkit; not bundled with this submission.
+  https://docs.nvidia.com/cuda/eula/
 - GNU C++ standard library (`libstdc++.so.6`) — GNU General Public License v3 with the GCC Runtime
   Library Exception.
-- Standard C runtime (`libc.so.6`, `libm.so.6`, `libgcc_s.so.1`) — GNU Lesser General Public
-  License v2.1 or later (glibc).
+- Standard C runtime (`libc.so.6`, `libm.so.6`, `libdl.so.2`, `libpthread.so.0`, `librt.so.1`) —
+  GNU Lesser General Public License v2.1 or later (glibc).
+- GCC low-level runtime (`libgcc_s.so.1`) — GNU General Public License v3 with the GCC Runtime
+  Library Exception.
