@@ -224,7 +224,7 @@ outside the submission's own timers. The harness plaintext row is
 the harness's own model on the same subset — the encrypted model scores at or above it at every
 size.
 
-## Licence
+## License
 
 Submission code (`src/`, `include/`, `CMakeLists.txt`, `weights/`) is Apache-2.0, as the
 repository. It uses only HEaaN2's public API — no HEaaN2 implementation source is in this repo.
