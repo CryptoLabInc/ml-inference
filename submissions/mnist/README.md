@@ -201,7 +201,7 @@ names, `<size>` as the only argument) is unchanged.
 
 Seed 3, through the **unmodified harness**, on 1× NVIDIA RTX 5090 (sm_120). Every figure is the
 mean of the three runs committed under [`measurements/`](../../measurements/), taken with the
-stage-7 warm-up and timer synchronization in place, on hardware that passes the
+`Encrypted computation` warm-up and timer synchronization in place, on hardware that passes the
 [architecture check](#-this-submission-requires-an-sm_120-gpu). That check is a precondition for
 quoting any timing here: on a mismatched GPU the first run absorbs several seconds of just-in-time
 compilation and reports it as evaluation time.
@@ -219,11 +219,11 @@ compilation and reports it as evaluation time.
 | **Accuracy** | PASS | 0.980 / 0.989 | 0.9796 |
 | Harness plaintext model | n/a | 0.960 / 0.981 | 0.9779 |
 
-The stage-7 sub-rows do not sum to the scored figure: the harness times the whole stage-7 *process*,
-so it also carries ~0.25 s of interpreter and CUDA-context startup and ciphertext I/O that sits
-outside the submission's own timers. The harness plaintext row is
-the harness's own model on the same subset — the encrypted model scores at or above it at every
-size.
+The indented sub-rows do not sum to `Encrypted computation` above them: the harness times that
+stage as a whole process, so the harness figure also carries ~0.25 s of interpreter and
+CUDA-context startup and ciphertext I/O that sits outside the submission's own timers. The harness
+plaintext row is the harness's own model on the same subset — the encrypted model scores at or
+above it at every size.
 
 ## License
 
