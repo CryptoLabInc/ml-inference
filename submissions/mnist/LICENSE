@@ -1,9 +1,7 @@
 Copyright (C) 2025-2026 CryptoLab, Inc.
 All rights reserved.
 
-This license applies solely to the contents of the `install/` directory of this submission (`submissions/mnist/install/`): the prebuilt HEaaN2 library (`lib/libheaan2.so`, `lib/libheaan2.so.0.2.0`), its public headers (`include/HEaaN2/`), and its CMake package files (`lib/cmake/`) — collectively, the "Software". The Software, including any pre-compiled binaries, libraries, containers, and associated documentation files, is the proprietary property of CryptoLab, Inc. ("CryptoLab"). No ownership or intellectual property rights are transferred under this license.
-
-All other files in this submission — including `src/`, `include/`, `weights/`, `CMakeLists.txt`, and `README.md` — are NOT covered by this license. They are licensed under the Apache License, Version 2.0, as stated in their file headers and in the LICENSE.md file at the root of this repository.
+This software, including any pre-compiled binaries, libraries, containers, and associated documentation files (collectively, the "Software"), is the proprietary property of CryptoLab, Inc. ("CryptoLab"). No ownership or intellectual property rights are transferred under this license.
 
 1. Relationship to the Repository License.
 
@@ -12,8 +10,6 @@ All other files in this submission — including `src/`, `include/`, `weights/`,
 2. Permissions.
 
    CryptoLab grants you a non-exclusive, non-transferable, non-sublicensable, royalty-free, and limited license to download, install, link, load, execute, and redistribute the Software SOLELY for the purpose of reproducing, evaluating, and verifying benchmark results. Redistribution is permitted only as part of the fhe-benchmarking repository or forks thereof.
-
-   Where an individual file within the Software carries a notice restricting its redistribution or reproduction, this license governs and grants the permissions stated above notwithstanding that notice.
 
 3. Restrictions.
 
