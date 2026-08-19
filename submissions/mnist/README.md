@@ -1,9 +1,7 @@
 # Workload implementation — MNIST ML inference
 
-This is a submission for the `ml-inference` workload (`--dataset mnist`) by CryptoLab Inc., written
-in C++ and using the pre-release [HEaaN2](https://heaan.io) CKKS library. It replaces the reference
-OpenFHE/HEIR implementation in this directory; the harness is unmodified. A prebuilt HEaaN2 is
-vendored in [`install/`](install/), so the build needs no HEaaN2 source and no private-repo access.
+A submission for the `ml-inference` workload (`--dataset mnist`) by CryptoLab, Inc., written in
+C++, using the pre-release [HEaaN2](https://heaan.io) CKKS library.
 
 Two circuits evaluate the same model, chosen by instance size alone: a **Halevi–Shoup**
 rotation-folded matrix-vector product at size 0, and a **PCMM** (GEMM-based) circuit at sizes 1–3.
@@ -18,11 +16,10 @@ No bootstrapping in either.
 fc1 (128×484, +b1)  →  x²  →  fc2 (10×128, +b2)
 ```
 
-A BatchNorm-folded 2-layer MLP, identical for both schemes. `x²` is the  with which the network was
-**trained**, not a polynomial approximation of ReLU, so the circuit evaluates the model
-exactly — the only error is CKKS noise (measured: max |decrypted − plaintext logit| = 0.109 on
-logits spanning [−32, +14]). Weights are row-major CSV in [`weights/`](weights/). Folded plaintext
-accuracy is 97.96%.
+`x²` is the activation with which the
+network was trained, following the idea of AESPA (Park et al.,
+[arXiv:2201.06699](https://arxiv.org/abs/2201.06699)). Weights are row-major CSV in
+[`weights/`](weights/). Folded plaintext accuracy is 97.96%.
 
 ### Cleartext pre- and post-processing
 
@@ -30,9 +27,9 @@ Everything the **model** computes runs on ciphertext. The cleartext steps:
 
 | Step | Side | Note |
 | --- | --- | --- |
-| `(p − 0.1307) / 0.3081` normalization | client, pre-encryption | Harness writes pixels already in [0,1]. Same as the reference submission and the harness's own model (`harness/mnist/test.py:60`) |
-| **center-crop 28×28 → 22×22** | client, pre-encryption | trims 3 pixels per side before encrypting |
-| argmax over 10 logits | client, post-decryption | same as the reference's `client_postprocess` |
+| normalization | client, pre-encryption | Harness writes pixels already in [0,1]; matches the harness's own model (`harness/mnist/test.py:60`) |
+| center-crop 28×28 → 22×22 | client, pre-encryption | trims 3 pixels per side before encrypting |
+| argmax over 10 logits | client, post-decryption | |
 | BatchNorm folded into fc1 | offline, model-only | standard eval-mode folding at weight export; does not touch the input |
 
 ## Schemes
@@ -68,8 +65,8 @@ how many blocks a matrix row splits into, and that decides which ring and which 
 out cheapest. Sizes 1 and 2 share one profile because both fit a single block and do identical
 work. `mlp::pcmm::profile(size)` is the selector.
 
-Written on the plaintext matrices, PCMM computes exactly the model at the top of this page —
-`buildModel` and `inference` in [`src/mlp_pcmm.cpp`](src/mlp_pcmm.cpp) are this, line for line:
+Written on the plaintext matrices, PCMM is the model at the top of this page. `buildModel` and
+`inference` in [`src/mlp_pcmm.cpp`](src/mlp_pcmm.cpp) follow it line by line:
 
 ```
 U1 = [ W1 | b1 ]        128 × 485   fc1 weights, b1 folded in as an extra column
@@ -80,11 +77,9 @@ H2 = H1 ⊙ H1             128 × n    elementwise square               (the x²
 Y  = W2 · H2 + b2         10 × n    fc2, then b2 added to every column         (fc2, +b2)
 ```
 
-`U1` and `W2` are the plaintext matrices `model.fc1_weights`/`model.fc2_weights` encode; `X` and
-`Y` are the ciphertext matrices `cx`/`cy`. Each line above is exactly one step in the code: a
-`pcmm` GEMM, a square, or an add, on those same shapes. PCMM does not approximate or restructure
-the model — it runs this same computation, just with `X` and `Y` encrypted and `U1`/`W2`/`b2`
-staying plaintext, exactly as the server already stores them.
+`U1` and `W2` are the plaintext matrices `model.fc1_weights`/`model.fc2_weights` encode;
+`X` and `Y` are the ciphertext matrices `cx`/`cy`. Each line is one step in the code — a `pcmm`
+GEMM, a square, or an bias addition, with `U1`, `W2` and `b2` staying plaintext.
 
 | | sizes 1–2 (100, 1000) | size 3 (10000) |
 | --- | --- | --- |
@@ -92,7 +87,7 @@ staying plaintext, exactly as the server already stores them.
 | Coefficients / message | 4096 (the full degree) | 16384 (CI's free half) |
 | Images / message | 2048 | 16384 |
 | Modulus chain | 34 + 3×24 ≈ 106 bits, 4 levels | 44 + 3×27 ≈ 125 bits, 4 levels |
-| Secret key | uniform ternary (hw = 0), sampled **directly** at 2^12 — no lifting | uniform ternary (hw = 0), sampled **directly** at 2^15 — no lifting |
+| Secret key | uniform ternary (hw = 0), sampled directly at 2^12 — no lifting | uniform ternary (hw = 0), sampled directly at 2^15 — no lifting |
 | Noise / SWK budget | σ = 3.2 / `maxBits128(12) = 106` bits, margin 5.0 | σ = 3.2 / `maxBits128(14) = 430` bits, margin 5.0 |
 
 ```
@@ -103,8 +98,6 @@ L0  +b2 (plaintext add, no level cost), decrypt
 ```
 
 ## Security and parameters
-
-The submission uses CKKS with the following configuration:
 
 | Parameter | HS (size 0) | PCMM (sizes 1–2) | PCMM (size 3) |
 | --- | --- | --- | --- |
@@ -170,7 +163,7 @@ Using conda for the toolchain? **Activate conda first, the venv second.** The ha
 stage via `subprocess.run(["python3", ...])`, resolved through `PATH`; a venv that is created but
 not active leaves those children on an interpreter with no `torch`.
 
-**Run.** The submission is driven by the harness. From the repository root:
+**Run.** From the repository root:
 
 ```console
 python3 harness/run_submission.py 0 --seed 3     # single (1 image)
@@ -183,8 +176,7 @@ Every run overwrites `measurements/<size>/results-<n>.json`.
 
 ## Executables
 
-Every stage binary parses `<size>` and dispatches on it, so the harness contract (seven fixed
-names, `<size>` as the only argument) is unchanged.
+Every stage binary takes `<size>` as its only argument and dispatches on it.
 
 | Executable | HS (size 0) | PCMM (sizes 1–3) |
 | --- | --- | --- |
@@ -198,12 +190,11 @@ names, `<size>` as the only argument) is unchanged.
 
 ## Results
 
-Seed 3, through the **unmodified harness**, on 1× NVIDIA RTX 5090 (sm_120). Every figure is the
-mean of the three runs committed under [`measurements/`](../../measurements/), taken with the
-warm-up and timer synchronization in place, on hardware that passes the
-[architecture check](#-this-submission-requires-an-sm_120-gpu). That check is a precondition for
-quoting any timing here: on a mismatched GPU the first run absorbs several seconds of just-in-time
-compilation and reports it as evaluation time.
+Seed 3, on one NVIDIA RTX 5090 (sm_120). Every figure is the mean of the three runs committed
+under [`measurements/`](../../measurements/), taken with the `Encrypted computation` warm-up and
+timer synchronization in place. The [architecture check](#-this-submission-requires-an-sm_120-gpu)
+is a precondition for quoting any timing here: on a mismatched GPU the first run absorbs several
+seconds of just-in-time compilation and reports it as evaluation time.
 
 | | size 0 (1) HS | sizes 1–2 (100 / 1000) PCMM | size 3 (10000) PCMM |
 | --- | --- | --- | --- |
@@ -218,18 +209,18 @@ compilation and reports it as evaluation time.
 | **Accuracy** | PASS | 0.980 / 0.989 | 0.9796 |
 | Harness plaintext model | n/a | 0.960 / 0.981 | 0.9779 |
 
-The `Encrypted computation` sub-rows do not sum to the scored figure: the harness times the whole *process*,
-so it also carries ~0.25 s of interpreter and CUDA-context startup and ciphertext I/O that sits
-outside the submission's own timers. The harness plaintext row is
-the harness's own model on the same subset — the encrypted model scores at or above it at every
-size.
+The indented sub-rows do not sum to `Encrypted computation` above them: the harness times that
+stage as a whole process, so the harness figure also carries ~0.25 s of interpreter and
+CUDA-context startup and ciphertext I/O that sits outside the submission's own timers. The harness
+plaintext row is the harness's own model on the same subset — the encrypted model scores at or
+above it at every size.
 
-## Licence
+## License
 
 Submission code (`src/`, `include/`, `CMakeLists.txt`, `weights/`) is Apache-2.0, as the
 repository. It uses only HEaaN2's public API — no HEaaN2 implementation source is in this repo.
 
-[`install/`](install/) carries a **prebuilt** HEaaN2 (public headers + `libheaan2.so.0.2.0`),
-proprietary to CryptoLab Inc. and **not** Apache-2.0. It is redistributed under [LICENSE](LICENSE),
+[`install/`](install/) carries a prebuilt HEaaN2 (public headers + `libheaan2.so.0.2.0`),
+proprietary to CryptoLab, Inc. and not Apache-2.0. It is redistributed under [LICENSE](LICENSE),
 which permits use solely for reproducing and verifying benchmark results. Its dependencies are
 listed in [LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY).
