@@ -29,7 +29,7 @@ Everything the **model** computes runs on ciphertext. The cleartext steps:
 
 | Step | Side | Note |
 | --- | --- | --- |
-| `(p − 0.1307) / 0.3081` normalization | client, pre-encryption | Harness writes pixels already in [0,1]; matches the harness's own model (`harness/mnist/test.py:60`) |
+| normalization | client, pre-encryption | Harness writes pixels already in [0,1]; matches the harness's own model (`harness/mnist/test.py:60`) |
 | center-crop 28×28 → 22×22 | client, pre-encryption | trims 3 pixels per side before encrypting |
 | argmax over 10 logits | client, post-decryption | |
 | BatchNorm folded into fc1 | offline, model-only | standard eval-mode folding at weight export; does not touch the input |
