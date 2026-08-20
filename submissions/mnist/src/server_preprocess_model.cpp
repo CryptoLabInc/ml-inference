@@ -34,29 +34,7 @@ int main() try {
 
     pcmm::writeRawModel({W1, b1, W2, b2}, std::string(CACHE_DIR) + "/pcmm.bin");
 
-    const auto marked = readInstanceMarker();
-    if (marked && usePcmm(*marked)) {
-        std::cout << "         [server] model cached to " << CACHE_DIR
-                  << " (PCMM instance: HS diagonals not needed)\n";
-        return 0;
-    }
-
-    //HS specific
-    const auto fc1 = padWeights(FC1, W1, b1);
-    const auto fc2 = padWeights(FC2, W2, b2);
-
-    const Levels levels = buildLevels();
-    const u32 top = levels.top();
-    const Device dev = targetDevice();
-
-    const auto enc1 = encodeDiags(FC1, fc1.W, levels, top - FC1_IN_DROP, dev);
-    serial::save(std::string(CACHE_DIR) + "/fc1_diags.bin", enc1);
-    const auto enc2 = encodeDiags(FC2, fc2.W, levels, top - FC2_IN_DROP, dev);
-    serial::save(std::string(CACHE_DIR) + "/fc2_diags.bin", enc2);
-
-    std::cout << "         [server] model cached to " << CACHE_DIR << " ("
-              << enc1.numDiags() << " + " << enc2.numDiags()
-              << " diagonals encoded)\n";
+    std::cout << "         [server] model cached to " << CACHE_DIR << "\n";
     return 0;
 } catch (const std::exception &e) {
     std::cerr << "server_preprocess_model: " << e.what() << "\n";

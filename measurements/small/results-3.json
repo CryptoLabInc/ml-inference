@@ -2,18 +2,18 @@
   "model_name": "mlp",
   "dataset_name": "mnist",
   "Timing": {
-    "Test dataset generation": "3.6307s",
-    "Key Generation": "0.1433s",
-    "Encrypted model preprocessing": "0.0724s",
-    "Input generation": "1.8456s",
-    "Input preprocessing": "0.0799s",
-    "Input encryption": "0.5164s",
-    "Encrypted computation": "0.4078s",
-    "Result decryption": "0.3014s",
-    "Result postprocessing": "0.0738s",
-    "Harness: Run inference for harness plaintext model": "1.7478s",
+    "Test dataset generation": "3.6487s",
+    "Key Generation": "0.1411s",
+    "Encrypted model preprocessing": "0.065s",
+    "Input generation": "1.8918s",
+    "Input preprocessing": "0.0792s",
+    "Input encryption": "0.4883s",
+    "Encrypted computation": "0.4046s",
+    "Result decryption": "0.3022s",
+    "Result postprocessing": "0.0703s",
+    "Harness: Run inference for harness plaintext model": "1.8095s",
     "Harness: Run quality check": "0.0007s",
-    "Total": "8.8198s"
+    "Total": "8.9013s"
   },
   "Bandwidth": {
     "Public and evaluation keys": "108.5K",
@@ -33,9 +33,9 @@
     }
   },
   "Server Reported": {
-    "Model setup (key load + diagonal/weight encoding)": "0.054016s",
-    "Warm-up (one discarded inference pass)": "0.033974s",
-    "Encrypted computation": "0.00057s",
-    "Total": "0.08856s"
+    "Model setup (key load + diagonal/weight encoding)": "0.053558s",
+    "Warm-up (one discarded inference pass)": "0.030378s",
+    "Encrypted computation": "0.000563s",
+    "Total": "0.084499s"
   }
 }

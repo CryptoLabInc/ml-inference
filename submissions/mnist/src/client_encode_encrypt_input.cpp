@@ -14,45 +14,6 @@ using namespace mlp;
 
 namespace {
 
-void runHS(const InstanceParams &prms, Device dev) {
-    const Levels levels = buildLevels();
-    const u32 top = levels.top();
-    const EnDecoder encoder = makeEncoder(levels);
-    EnDecryptor encryptor{EncryptParams{DiscreteGaussian(NOISE_STDDEV)}};
-
-    auto enc_key = serial::loadAsPtr<IEncKey>(
-        (prms.pubkeydir() / ENC_KEY_FILE).string(), dev);
-
-    auto images =
-        readSamples(prms.preprocessed_input_file().string(), INPUT_DIM);
-    if (images.size() != prms.getBatchSize())
-        throw std::runtime_error("preprocessed input size does not match "
-                                 "instance batch size");
-
-    fs::create_directories(prms.ctxtupdir());
-    const size_t n_ct = numCtxts(images.size());
-    for (size_t j = 0; j < n_ct; ++j) {
-        const size_t first = j * IMAGES_PER_CTXT;
-        const size_t count =
-            std::min<size_t>(IMAGES_PER_CTXT, images.size() - first);
-        auto msg = packImages(images, first, count);
-        msg.to(dev);
-
-        auto ptxt = IPlaintext::make(PtxtType::NORMAL);
-        auto ctxt = ICiphertext::make(EncType::RLWE);
-        encoder.encode(msg, *ptxt, top);
-        encryptor.encrypt(*ptxt, *enc_key, *ctxt);
-
-        serial::save(
-            (prms.ctxtupdir() / ("cipher_input_" + std::to_string(j) + ".bin"))
-                .string(),
-            *ctxt);
-    }
-
-    std::cout << "         [client] encrypted " << images.size()
-              << " images into " << n_ct << " ciphertext(s)\n";
-}
-
 void runPcmm(const InstanceParams &prms, Device dev, InstanceSize size) {
     const auto prof = pcmm::profile(size);
     const Levels levels = pcmm::buildLevels(prof);
@@ -92,10 +53,7 @@ int main(int argc, char *argv[]) try {
     const InstanceParams prms(size);
     const Device dev = targetDevice();
 
-    if (usePcmm(size))
-        runPcmm(prms, dev, size);
-    else
-        runHS(prms, dev);
+    runPcmm(prms, dev, size);
 
     return 0;
 } catch (const std::exception &e) {
