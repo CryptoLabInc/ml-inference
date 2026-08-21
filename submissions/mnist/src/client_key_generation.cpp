@@ -15,7 +15,7 @@ using namespace mlp;
 
 namespace {
 
-void runPcmm(const InstanceParams &prms, InstanceSize size) {
+void run(const InstanceParams &prms, InstanceSize size) {
     const auto prof = pcmm::profile(size);
     const Levels levels = pcmm::buildLevels(prof);
 
@@ -38,7 +38,7 @@ int main(int argc, char *argv[]) try {
     const InstanceParams prms(size);
     writeInstanceMarker(size);
 
-    runPcmm(prms, size);
+    run(prms, size);
 
     std::cout << "         [client] keys written to " << prms.pubkeydir()
               << "\n";

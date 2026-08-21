@@ -14,7 +14,7 @@ using namespace mlp;
 
 namespace {
 
-void runPcmm(const InstanceParams &prms, Device dev, InstanceSize size) {
+void run(const InstanceParams &prms, Device dev, InstanceSize size) {
     const auto prof = pcmm::profile(size);
     const Levels levels = pcmm::buildLevels(prof);
     const u32 top = levels.top();
@@ -53,7 +53,7 @@ int main(int argc, char *argv[]) try {
     const InstanceParams prms(size);
     const Device dev = targetDevice();
 
-    runPcmm(prms, dev, size);
+    run(prms, dev, size);
 
     return 0;
 } catch (const std::exception &e) {

@@ -14,8 +14,8 @@ using namespace mlp;
 
 namespace {
 
-std::vector<std::vector<double>> runPcmm(const InstanceParams &prms, Device dev,
-                                         InstanceSize size) {
+std::vector<std::vector<double>> run(const InstanceParams &prms, Device dev,
+                                     InstanceSize size) {
     const auto prof = pcmm::profile(size);
     const Levels levels = pcmm::buildLevels(prof);
     const EnDecoder coeff_encoder = pcmm::makeCoeffEncoder(levels, prof);
@@ -47,7 +47,7 @@ int main(int argc, char *argv[]) try {
     const Device dev = targetDevice();
 
     const auto scores =
-        runPcmm(prms, dev, size);
+        run(prms, dev, size);
 
     fs::create_directories(prms.iointermdir());
     writeSamples(scores, prms.model_scores_file().string());

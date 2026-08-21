@@ -52,7 +52,7 @@ struct StageTimes {
     double eval_s = 0.0;
 };
 
-StageTimes runPcmm(const InstanceParams &prms, Device dev, InstanceSize size) {
+StageTimes run(const InstanceParams &prms, Device dev, InstanceSize size) {
     const Timer t_setup;
 
     const auto prof = pcmm::profile(size);
@@ -107,7 +107,7 @@ int main(int argc, char *argv[]) try {
     const Device dev = targetDevice();
 
     const StageTimes tm =
-        runPcmm(prms, dev, size);
+        run(prms, dev, size);
 
     std::ofstream json(prms.server_reported_steps_file());
     json << std::fixed << std::setprecision(6) << "{\n"
