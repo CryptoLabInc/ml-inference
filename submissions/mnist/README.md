@@ -4,7 +4,7 @@ A submission for the `ml-inference` workload (`--dataset mnist`) by CryptoLab, I
 C++, using the pre-release [HEaaN2](https://heaan.io) CKKS library.
 
 Every instance size evaluates the model with a single **PCMM** (GEMM-based) circuit. PCMM needs no
-rotations, so the submission generates **no rotation keys at any size**. No bootstrapping.
+Every instance size evaluates the model with a single, **PCMM** based circuit. Note that the circuit is a short sequence of two PCMMs and a multiplication and does not require any bootstrap.
 
 > **Hardware.** An **NVIDIA sm_120 (Blackwell) GPU is required** — the vendored library targets
 > sm_120 only, with no PTX fallback. 
