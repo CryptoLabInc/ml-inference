@@ -44,7 +44,6 @@
 #include "HEaaN2/Levels.hpp"
 #include "HEaaN2/LevelsBuilder.hpp"
 #include "HEaaN2/Matrix.hpp"
-#include "HEaaN2/MatrixVectorEval.hpp"
 #include "HEaaN2/Message.hpp"
 #include "HEaaN2/ParamsSet.hpp"
 #include "HEaaN2/Pimpl.hpp"
