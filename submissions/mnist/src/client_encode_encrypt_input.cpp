@@ -1,56 +1,62 @@
-// Copyright 2025 Google LLC
+// Copyright (c) 2026 CryptoLab, Inc.
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-#include "utils.h"
-#include "mlp_encryption_utils.h"
+// This software is licensed under the terms of the Apache v2 License.
+// See the LICENSE.md file for details.
+//============================================================================
 
-using namespace lbcrypto;
+#include "mlp_pcmm.hpp"
+#include "mlp_pipeline.hpp"
 
+#include <iostream>
 
-int main(int argc, char* argv[]){
+using namespace heaan;
+using namespace mlp;
 
-    if (argc < 2 || !std::isdigit(argv[1][0])) {
-        std::cout << "Usage: " << argv[0] << " instance-size [--count_only]\n";
-        std::cout << "  Instance-size: 0-SINGLE, 1-SMALL, 2-MEDIUM, 3-LARGE\n";
-        return 0;
-    }
-    auto size = static_cast<InstanceSize>(std::stoi(argv[1]));
-    InstanceParams prms(size);
+namespace {
 
-    CryptoContext<DCRTPoly> cc = read_crypto_context(prms);
+void run(const InstanceParams &prms, Device dev, InstanceSize size) {
+    const auto prof = pcmm::profile(size);
+    const Levels levels = pcmm::buildLevels(prof);
+    const u32 top = levels.top();
+    const EnDecoder slot_encoder = pcmm::makeSlotEncoder(levels, prof);
+    EnDecryptor encryptor{EncryptParams{DiscreteGaussian(NOISE_STDDEV)}};
 
-    // Step 2: Read public key
-    PublicKey<DCRTPoly> pk = read_public_key(prms);
+    auto sk = serial::loadAsPtr<ISecretKey>(
+        (prms.seckeydir() / SECRET_KEY_FILE).string(), dev);
 
-    std::vector<Sample> dataset;
-    load_dataset(dataset, prms.preprocessed_input_file().c_str());
-    if (dataset.empty()) {
-        throw std::runtime_error("No data found in " + prms.preprocessed_input_file().string());
-    }
-    // Step 2: Encrypt inputs
-    if (dataset.size() != prms.getBatchSize()) {
-        throw std::runtime_error("Dataset size does not match instance size");
-    }
+    auto images =
+        readSamples(prms.preprocessed_input_file().string(), INPUT_DIM);
+    const u32 num_images = static_cast<u32>(images.size());
+    if (num_images != prms.getBatchSize())
+        throw std::runtime_error("preprocessed input size does not match "
+                                 "instance batch size");
 
-    std::vector<CiphertextT> ctxt;
+    auto x = pcmm::packImages(images, prof);
+    auto px = pcmm::encodeMatrix(slot_encoder, x, top);
+
+    auto cx = ICtMatrix::make();
+    encryptor.encrypt(*px, *sk, *cx);
+    pcmm::setDFT(*cx, /*dft=*/false, num_images, prof);
+
     fs::create_directories(prms.ctxtupdir());
-    for (size_t i = 0; i < dataset.size(); ++i) {
-        auto *input = dataset[i].image;
-        std::vector<float> input_vector(input, input + MNIST_DIM);
-        ctxt = mlp_encrypt(cc, input_vector, pk);
-        auto ctxt_path = prms.ctxtupdir()/("cipher_input_" + std::to_string(i) + ".bin");
-        Serial::SerializeToFile(ctxt_path, ctxt, SerType::BINARY);
-    }
+    pcmm::saveCtMatrix(
+        (prms.ctxtupdir() / pcmm::INPUT_CTMATRIX_FILE).string(), *cx);
+
+    std::cout << "         [client] encrypted " << num_images
+              << " images into 1 ciphertext matrix\n";
+}
+
+} // namespace
+
+int main(int argc, char *argv[]) try {
+    const auto size = parseInstanceSize(argc, argv);
+    const InstanceParams prms(size);
+    const Device dev = targetDevice();
+
+    run(prms, dev, size);
 
     return 0;
+} catch (const std::exception &e) {
+    std::cerr << "client_encode_encrypt_input: " << e.what() << "\n";
+    return 1;
 }

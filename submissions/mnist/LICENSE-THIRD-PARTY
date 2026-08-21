@@ -1,0 +1,13 @@
+This software incorporates third-party projects under licenses as listed below.
+
+- NVIDIA Software License Agreement and CUDA Supplement to Software License Agreement https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/LICENSE.txt
+- Keccak (https://keccak.team/2015/tweetfips202.html) from kyber (https://github.com/pq-crystals/kyber). Vendored byte-identical under `external/`:
+  - `fips202.{h,c}` (from `ref/`) and `fips202x4.{h,c}` (from `avx2/`) — public domain.
+  - `keccak4x/KeccakP-1600-times4-SIMD256.c`, `KeccakP-1600-times4-SnP.h`, `KeccakP-1600-unrolling.macros`, `KeccakP-align.h`, `KeccakP-SIMD256-config.h` (from `avx2/keccak4x/`) — Keccak/Keyak/Ketje Teams, CC0 1.0 public-domain dedication; full terms in the file headers.
+  - `keccak4x/KeccakP-brg_endian.h` (from `avx2/keccak4x/`) — Brian Gladman BSD-style licence, Copyright (c) 1998-2008 Brian Gladman; full terms in the file header.
+- gperftools (tcmalloc) BSD 3-Clause License https://github.com/gperftools/gperftools/blob/master/COPYING
+- cereal (https://github.com/USCiLab/cereal) v1.3.2, BSD 3-Clause License, Copyright (c) 2013-2022 Randolph Voorhies, Shane Grant. cereal redistributes the following components under `include/cereal/external/`:
+  - RapidJSON (https://github.com/Tencent/rapidjson) — MIT License, Copyright (C) 2015 THL A29 Limited, a Tencent company, and Milo Yip.
+  - RapidXml — dual-licensed under the Boost Software License 1.0 or the MIT License, Copyright (c) 2006, 2007 Marcin Kalicinski.
+  - base64 (`base64.hpp`) — Zlib-style permissive license, Copyright (C) 2004-2008 René Nyffenegger.
+

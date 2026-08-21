@@ -25,6 +25,7 @@ harness/cifar10/__pycache__/
 *.so
 *.dylib
 *.dll
+!submissions/mnist/install/lib/*.so
 
 # Fortran module files
 *.mod
