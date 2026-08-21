@@ -56,7 +56,7 @@ Y  = W2 · H2 + b2         10 × n    fc2, then b2 added to every column        
 
 `U1` and `W2` are the plaintext matrices `model.fc1_weights`/`model.fc2_weights` encode;
 `X` and `Y` are the ciphertext matrices `cx`/`cy`. Each line is one step in the code — a `pcmm`
-GEMM, a square, or an bias addition, with `U1`, `W2` and `b2` staying plaintext.
+GEMM, a square, or a bias addition, with `U1`, `W2` and `b2` staying plaintext.
 
 | | sizes 0–2 (1, 100, 1000) | size 3 (10000) |
 | --- | --- | --- |
