@@ -108,13 +108,20 @@ Communications in Cryptology, 1(4):26, 2024.
 
 | | |
 | --- | --- |
+| Architecture | x86_64 |
 | GPU | **NVIDIA sm_120 (Blackwell) only** |
 | CUDA | ≥ 12.8 runtime (`libcudart.so.12`, `libcublas.so.12`) on the library path |
 | Toolchain | CMake ≥ 3.23, GCC 14 (C++17), OpenMP, gperftools (`libtcmalloc`) |
-| Python | the repo's `requirements.txt` |
 
 GCC and CUDA must be a matching pair; a mismatch fails obscurely during CMake's
 CUDA compiler detection rather than at your code.
+
+The recommended way to install the build toolchain and Python dependencies is via conda using the top-level `environment.yml`. If you don't already have conda, install [Miniforge](https://github.com/conda-forge/miniforge) first. On Linux `x86_64`:
+```console
+curl -L -O "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh"
+bash Miniforge3-Linux-x86_64.sh -b -p "$HOME/miniforge3"
+source "$HOME/miniforge3/etc/profile.d/conda.sh"
+```
 
 > ### ⚠ This submission requires an sm_120 GPU
 >
@@ -123,10 +130,10 @@ CUDA compiler detection rather than at your code.
 **Build.** From the repository root:
 
 ```console
-python -m venv bmenv && source ./bmenv/bin/activate
-pip install -r requirements.txt
+conda env create -f environment.yml
+conda activate ml-inference
 
-./scripts/build_task.sh ./submissions/mnist      # optional; the harness runs it anyway
+./scripts/build_task.sh ./submissions/mnist
 ```
 
 which configures and builds all stage executables against the vendored library:
@@ -138,9 +145,6 @@ cmake -S submissions/mnist -B submissions/mnist/build \
 cmake --build submissions/mnist/build -j $(nproc)
 ```
 
-`CMAKE_PREFIX_PATH` must be absolute: CMake resolves a relative one against the *build* directory,
-not the invocation directory. Binaries are placed in `submissions/mnist/build/`.
-
 Using conda for the toolchain? **Activate conda first, the venv second.** The harness spawns every
 stage via `subprocess.run(["python3", ...])`, resolved through `PATH`; a venv that is created but
 not active leaves those children on an interpreter with no `torch`.
@@ -148,6 +152,9 @@ not active leaves those children on an interpreter with no `torch`.
 **Run.** From the repository root:
 
 ```console
+python -m venv bmenv && source ./bmenv/bin/activate
+pip3 install -r requirements.txt
+
 python3 harness/run_submission.py 0 --seed 3     # single (1 image)
 python3 harness/run_submission.py 1 --seed 3     # small  (100)
 python3 harness/run_submission.py 2 --seed 3     # medium (1000)
