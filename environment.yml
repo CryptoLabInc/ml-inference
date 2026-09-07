@@ -1,7 +1,9 @@
 name: ml-inference
 channels:
+  - nvidia
   - conda-forge
 dependencies:
+  - nvidia::cuda=12.8.1
   - gcc_linux-64=14.3.0
   - gxx_linux-64=14.3.0
   - make
